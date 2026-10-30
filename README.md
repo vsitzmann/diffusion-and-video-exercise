@@ -18,7 +18,7 @@ picture of what you are building right next to the code.
 You need Python 3.10 or newer. The easiest way is [uv](https://docs.astral.sh/uv/):
 
 ```bash
-git clone git@github.com:vsitzmann/diffusion-and-video-exercise.git
+git clone https://github.com/vsitzmann/diffusion-and-video-exercise.git
 cd diffusion-and-video-exercise
 uv sync                                          # creates .venv with torch (CPU), marimo, ...
 uv run marimo edit 01_regression_to_drifting.py  # opens the notebook in your browser

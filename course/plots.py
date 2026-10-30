@@ -184,3 +184,47 @@ def decoded_panels(results, emb, data_u, title):
                  label=f"distance from sheet (data mean: {mean_off.item():.2f})")
     fig.suptitle(title, fontsize=10)
     return fig
+
+
+def model_diagram():
+    """The video model unrolled over three frames: encoder + ConvGRU (bottom), denoiser (top)."""
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+
+    fig, ax = plt.subplots(figsize=(10, 4.4))
+    ax.set_xlim(-1.7, 10.2)
+    ax.set_ylim(-0.5, 5.0)
+    ax.axis("off")
+    H = 0.55
+
+    def box(x, y, text, color="#e7f0fa", w=1.4):
+        ax.add_patch(FancyBboxPatch((x - w / 2, y - H / 2), w, H, boxstyle="round,pad=0.03",
+                                    fc=color, ec="#555", lw=0.8))
+        ax.text(x, y, text, ha="center", va="center", fontsize=9)
+
+    def arrow(a, b, color="#555", rad=0.0):
+        ax.add_patch(FancyArrowPatch(a, b, arrowstyle="-|>", mutation_scale=10, color=color, lw=1,
+                                     connectionstyle=f"arc3,rad={rad}", shrinkA=1, shrinkB=1))
+
+    for i in range(3):
+        t, nxt, x = i + 1, i + 2, 3.3 * i
+        xd = x + 1.65
+        box(x, 0, rf"$\tilde x_{t}$ (level $\tilde k_{t}$)", "#f3f3f3", w=1.8)
+        box(x, 1.1, "Enc")
+        box(x - 1.15, 1.45, rf"$a_{t}$", "#fff4e0", w=0.6)
+        box(x, 2.2, rf"GRU: $h_{t}$", "#dcefdc")
+        box(xd, 3.3, "Denoiser", "#fde2e2", w=1.5)
+        box(xd, 4.35, rf"noisy $x_{nxt}$ (level $k_{nxt}$)", "#f3f3f3", w=1.9)
+        box(xd + 1.3, 3.3, rf"$\hat x_{nxt}$", "#ffffff", w=0.6)
+        arrow((x, H / 2), (x, 1.1 - H / 2))
+        arrow((x, 1.1 + H / 2), (x, 2.2 - H / 2))
+        arrow((x - 1.15, 1.45 + H / 2), (x - 0.45, 2.2 - H / 2))
+        arrow((x + 0.35, 2.2 + H / 2), (xd - 0.3, 3.3 - H / 2))
+        arrow((x + 0.9, 0.05), (xd + 0.25, 3.3 - H / 2), color="#999", rad=0.15)  # previous frame
+        arrow((xd, 4.35 - H / 2), (xd, 3.3 + H / 2))
+        arrow((xd + 0.75, 3.3), (xd + 1.0, 3.3))
+        if i < 2:
+            arrow((x + 0.7, 2.2), (x + 3.3 - 0.7, 2.2), color="#2b8a3e")
+    ax.text(-1.6, 4.85, "The model, unrolled over three frames. Green: the RNN memory. Grey: the previous "
+            "frame also goes straight to the denoiser.", fontsize=9)
+    fig.tight_layout()
+    return fig

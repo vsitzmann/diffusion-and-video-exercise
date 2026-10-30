@@ -111,22 +111,8 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.mermaid("""
-    flowchart LR
-      x0["x̃₁ (level k̃₁)"] --> E1[Enc] --> G1((GRU)) --> G2((GRU)) --> G3((GRU))
-      a1[a₁] --> G1
-      x1["x̃₂ (level k̃₂)"] --> E2[Enc] --> G2
-      a2[a₂] --> G2
-      x2["x̃₃ (level k̃₃)"] --> E3[Enc] --> G3
-      a3[a₃] --> G3
-      G1 -- h₁ --> D2[Denoiser] --> y2["x̂₂"]
-      n2["x₂ at level k₂"] --> D2
-      G2 -- h₂ --> D3[Denoiser] --> y3["x̂₃"]
-      n3["x₃ at level k₃"] --> D3
-      G3 -- h₃ --> D4[Denoiser] --> y4["x̂₄"]
-      n4["x₄ at level k₄"] --> D4
-    """)
+def _(plots):
+    plots.model_diagram()
     return
 
 
@@ -289,8 +275,8 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(V, mw, torch):
-    # 16 test episodes (new mazes) and a bank of real frames to judge realism against
-    N_TEST = 16
+    # 24 test episodes (new mazes) and a bank of real frames to judge realism against
+    N_TEST = 24
     test_set = mw.dataset(N_TEST, 304, 16, seed=99)
     test_ctx = V.to_tensor(test_set["frames"][:, :8])
     test_actions = torch.as_tensor(test_set["actions"]).long()
@@ -323,23 +309,24 @@ def _(V, bank, mo, np, plots, plt, rollouts, test_set):
     for _name, _o in rollouts.items():
         _r = V.realism(_o, bank)
         _axes[0].plot(_r.clamp(max=1.0).mean(0).numpy(), label=_name, lw=1.2)
-        _axes[1].plot(np.convolve((_r > _thr).float().mean(0).numpy(), np.ones(5) / 5, mode="same"), label=_name, lw=1.2)
+        _axes[1].plot(np.convolve((_r > _thr).float().mean(0).numpy(), np.ones(15) / 15, mode="valid"), label=_name, lw=1.2)
     _axes[0].plot(_real.mean(0).numpy(), "k--", lw=1, label="real video")
     _axes[0].set_title("distance to the nearest real frame (lower = more realistic)")
-    _axes[1].set_title(f"fraction of broken frames (distance > {_thr})")
+    _axes[1].set_title(f"fraction of broken frames (distance > {_thr}), smoothed")
     for _ax in _axes:
         _ax.set_xlabel("frame")
     _axes[1].legend(fontsize=7)
     _fig.tight_layout()
     _show = ["full sequence", "teacher forcing · clean", [k for k in rollouts if k.startswith("diffusion forcing · re")][0]]
-    _ep = 0
+    # show the episode where teacher forcing breaks the most
+    _ep = int((V.realism(rollouts["teacher forcing · clean"], bank) > _thr).sum(1).argmax())
     _vids = [V.to_uint8(rollouts[k][_ep]) for k in _show]
     _strip_rows = [test_set["frames"][_ep][: len(_vids[0])]] + _vids
     mo.vstack([
         _fig,
-        mo.md("**Episode 0**, as a film strip (every 8th frame) and as a video. The real video only "
-              "shares the first 4 frames; after that each model imagines its own maze, driven by "
-              "the same actions."),
+        mo.md(f"**Episode {_ep}** (the one where teacher forcing breaks the most), as a film strip "
+              "(every 8th frame) and as a video. The real video only shares the first frames; after "
+              "that each model imagines its own maze, driven by the same actions."),
         plots.video_grid(_strip_rows, ["real"] + _show, every=8),
         plots.video_html(_vids, _show, size=2.0, interval=80),
     ])
@@ -423,7 +410,7 @@ def _(V, k_ctx, mo, models, ok_renoise, renoise_impl, test_actions, test_ctx, to
         return act(act(state, action), action)
 
     _buttons = [mo.ui.button(label=lbl, on_change=lambda _, a=a: set_world(act2(get_world(), a)))
-                for lbl, a in [("⟲ left", 1), ("⬆ forward", 0), ("⟳ right", 2)]]
+                for lbl, a in [("← turn left", 1), ("↑ forward", 0), ("turn right →", 2)]]
     _reset = mo.ui.button(label="restart", on_change=lambda _: set_world(start()))
     play_controls = mo.hstack(_buttons + [_reset], justify="start")
     return get_world, play_controls
