@@ -1,0 +1,19 @@
+[package]
+name = "mazeworld_rs"
+version = "0.1.0"
+edition = "2021"
+description = "Fast raycaster for the mazeworld exercise environment"
+
+[lib]
+name = "mazeworld_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py39"] }
+numpy = "0.27"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

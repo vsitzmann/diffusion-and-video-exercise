@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Run a command on srg-lab-server without slowing down its services
+# (same limits as ~/Work/gen_models_exploration/run): nice 19, idle I/O,
+# at most 4 cores and 4 GB RAM. Override with CORES=2 MEM=2G ./run ...
+set -euo pipefail
+cd "$(dirname "$0")"
+CORES=${CORES:-4}
+MEM=${MEM:-4G}
+export OMP_NUM_THREADS=$CORES MKL_NUM_THREADS=$CORES
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+cmd=("$@")
+[[ ${cmd[0]} == python ]] && cmd[0]=.venv/bin/python
+exec systemd-run --user --scope -q \
+  -p CPUQuota=$((CORES * 100))% -p MemoryMax=$MEM -p MemorySwapMax=0 \
+  nice -n 19 ionice -c3 "${cmd[@]}"

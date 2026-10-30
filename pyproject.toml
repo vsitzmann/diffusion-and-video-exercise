@@ -1,0 +1,23 @@
+[project]
+name = "diffusion-and-video-exercise"
+version = "0.1.0"
+description = "Hands-on exercises for 'Video Generative Models: The LLM Moment for Embodied Intelligence?' (Vincent Sitzmann, MIT, Nov 2026)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "numpy>=1.24",
+    "matplotlib>=3.8",
+    "marimo>=0.25",
+]
+
+[tool.uv]
+package = false
+
+# CPU-only PyTorch on Linux/Windows (a few hundred MB instead of several GB of CUDA libraries).
+[tool.uv.sources]
+torch = { index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
