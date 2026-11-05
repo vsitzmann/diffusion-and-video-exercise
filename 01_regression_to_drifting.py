@@ -31,6 +31,15 @@ def _(mo):
     replace the `raise NotImplementedError` with your code. A check below each exercise tells you
     whether it works. If you get stuck, flip the switch below to use the reference solutions
     (they are in `course/solutions.py`). Time: about 20 minutes.
+
+    **Everything is PyTorch.** The networks are `torch.nn.Module`s, and the data and noise are
+    `torch` tensors.
+
+    **Ask an AI assistant.** If you use a coding agent (Claude Code, Codex, Cursor, ...), start it
+    in this folder and ask it anything: what `torch.cdist` does, why your shapes don't match, what
+    an equation means, why a method fails. The folder has an `AGENTS.md` file that tells the agent
+    to be a tutor. It answers PyTorch questions directly and helps you find the answer with hints
+    and questions, but it won't write the exercise code for you.
     """)
     return
 

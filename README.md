@@ -47,6 +47,9 @@ is no hidden state and no "run all cells again".
   A check right below tells you whether it works.
 - Stuck? Each notebook has a switch at the top that uses the reference solutions instead
   (`course/solutions.py`), so you can always continue.
+- Everything is PyTorch. If you use a coding agent (Claude Code, Codex, Cursor, ...), start it in
+  this folder and ask it questions. `AGENTS.md` tells it to act as a tutor: it answers PyTorch
+  questions and gives hints, but it won't write the exercises for you.
 - Sliders and dropdowns change datasets and hyperparameters. Play with them.
 - Notebook 3 trains three small video models (2–3 minutes each). If you are short on time, choose
   "load the pretrained checkpoints".
