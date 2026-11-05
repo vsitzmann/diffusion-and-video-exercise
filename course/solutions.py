@@ -28,33 +28,33 @@ def drift_target(y, x, lam, tau):
 # ---------------------------------------------------------------- notebook 2
 
 
-def conditional_path(z, t, eps):
-    return t * z + (1 - t) * eps
+def conditional_path(x1, t, eps):
+    return t * x1 + (1 - t) * eps
 
 
-def conditional_velocity(x, z, t):
-    return (z - x) / (1 - t)
+def conditional_velocity(x, x1, t):
+    return (x1 - x) / (1 - t)
 
 
-def posterior_weights(x, t, Z):
-    # p(z_i | x) ∝ N(x; t z_i, (1-t)^2 I): a softmax over the training points
-    sq = torch.cdist(x, t * Z) ** 2
+def posterior_weights(x, t, X1):
+    # p(x1_i | X_t = x) ∝ N(x; t x1_i, (1-t)^2 I): a softmax over the training points
+    sq = torch.cdist(x, t * X1) ** 2
     return torch.softmax(-sq / (2 * (1 - t) ** 2), dim=1)
 
 
-def marginal_velocity(x, t, Z):
-    w = posterior_weights(x, t, Z)
-    z_hat = w @ Z  # posterior mean E[z | X_t = x]
-    return (z_hat - x) / (1 - t)
+def marginal_velocity(x, t, X1):
+    w = posterior_weights(x, t, X1)
+    x1_hat = w @ X1  # posterior mean E[x1 | X_t = x]
+    return (x1_hat - x) / (1 - t)
 
 
-def flow_matching_loss(net, z, t_min=0.0):
-    B = z.shape[0]
+def flow_matching_loss(net, x1, t_min=0.0):
+    B = x1.shape[0]
     t = torch.rand(B, 1) * (1 - t_min) + t_min
-    eps = torch.randn_like(z)
-    x = t * z + (1 - t) * eps
-    v_pred = net.velocity(x, t)
-    v_target = z - eps
+    eps = torch.randn_like(x1)
+    x_t = t * x1 + (1 - t) * eps
+    v_pred = net.velocity(x_t, t)
+    v_target = x1 - eps
     return ((v_pred - v_target) ** 2).mean()
 
 

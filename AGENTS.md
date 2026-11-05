@@ -17,6 +17,7 @@ and the math does. Every exercise has its LaTeX math and a visualization right n
 01_regression_to_drifting.py  marimo notebooks (plain .py). Exercises raise NotImplementedError;
 02_flow_matching.py           a check cell below each one; a switch at the top swaps in
 03_video_world_model.py       course/solutions.py for every exercise.
+04_video_policy.py            (notebook 4 uses course/check4.py and course/solutions4.py)
 course/toys.py        2D toys (TOYS) and Embedding: identity / linear (JiT) / crumpled cos(Wu+b), decode()
 course/nets.py        Generator (one-step) and FlowNet (pred="v" or "x")
 course/plots.py       matplotlib helpers. Animations go through _player() -> mo.iframe, because
@@ -25,9 +26,16 @@ course/video.py       VideoDenoiser (ConvGRU over context frames + small U-Net d
                       the previous frame), train_video, rollout, rollout_full_sequence, realism
 course/check.py       exercise checks; QC_SOLUTIONS=1 turns the solutions switch on by default
 course/solutions.py   reference solutions (students may read them)
+course/policy.py      notebook 4: next-frame U-Net denoiser (DIAMOND-style frame stacking, per-frame
+                      context noise levels, actions or null, egocentric goal map or null), guided
+                      Euler sampling, generate/imagine, train_video, IDM + train_idm, navigate
+                      (closed loop), viewer_html (three.js viewer, template course/assets/viewer4.html)
+course/assets/        viewer4.html; nb4_reference.json = GPU results of the pretrained nb4 models
 mazeworld/            maze generation, explorer policy, dynamics (NumPy) + render_numpy.py
+                      world4.py: notebook 4's 64x64 textured world (NumPy only), expert, dataset()
 rust/                 PyO3/maturin crate mazeworld_rs: the same raycaster, rayon-parallel
 checkpoints/          shipped video checkpoints (1500 steps, seed 0, = the notebook default; tools/train_checkpoints.py)
+                      nb4_video16/64.pt, nb4_idm16/64.pt: notebook 4 (fp16 EMA weights, trained on schadenfreude)
 tools/                train_checkpoints.py, check_parity.py, test_notebooks.sh
 run                   resource-capped wrapper (4 cores, 4 GB, nice 19), same as gen_models_exploration
 dev/                  scratch (gitignored): prototypes, exported HTML, screenshots
@@ -48,9 +56,11 @@ dev/                  scratch (gitignored): prototypes, exported HTML, screensho
   pixel (they do: max difference 0). Rebuild the Rust wheel with
   `PATH=$HOME/.cargo/bin:$PATH .venv/bin/maturin build --release -m rust/Cargo.toml -o dev/wheels`
   and `pip install` it. The toolchain is user-local (rustup, `~/.cargo`).
-- Notation follows the lecture (MIT 6.S184): noise $X_0$ at $t=0$, data $z$ at $t=1$,
-  $x = t z + (1-t)\epsilon$. Notebook 1 uses the deck's earlier notation ($z$ = noise, $x$ = data);
-  notebook 2 flags the switch. In notebook 3 the noise level is $k$ (1 = clean), because $t$ is the frame index.
+- Notation (Vincent's decision, Nov 2): data is $x$, noise/latent is $z$ or $\epsilon$, in every
+  notebook. Never use 6.S184's $z$-as-data. Flow matching follows Lipman et al.: the moving point
+  is $x$, the data point $x_1$ (code: `x1`, training set `X1`), noise $x_0 = \epsilon$ at $t=0$;
+  $p_t(x \mid x_1)$, $u_t(x \mid x_1)$, $x_t = t x_1 + (1-t)\epsilon$. In notebook 3 the noise level
+  is $k$ (1 = clean), because $t$ is the frame index.
 
 ## What the experiments showed (Oct 30, 2026), and the settings that depend on it
 
@@ -83,3 +93,23 @@ dev/                  scratch (gitignored): prototypes, exported HTML, screensho
   it shows *less* divergence than replaying the test episode's actions, so the notebook uses
   the GT actions.
 - Full-sequence continuation uses chunked replacement sampling (8 known + 8 new frames).
+
+## Notebook 4 (Nov 4, 2026)
+
+- **Provenance.** The models were trained on schadenfreude (`/nobackup/nvme1/sitzmann/video_nb4`,
+  scripts in `dev/nb4/gpu/`, report in `dev/nb4/results/report.html`). `nb4_video16` = run
+  `s16_n` (about 40k steps), `nb4_video64` = run `big64m` (30k steps, 30% uniform noise levels).
+  The 16×16 model was trained on box-filtered 64×64 frames; the notebook renders 16×16 directly
+  with 4×4 supersampling (mean difference 1.4/255), and closed-loop success is unchanged.
+- **What the goal conditioning needed.** An egocentric map (not the global one) and the plain
+  x-loss with noise levels biased toward noise (logit-normal, mean −0.8). JiT's v-loss weighting
+  made the model ignore the map. Don't change these without re-measuring the direction match.
+- **Measured** (64 held-out mazes, 400-step budget, `course/assets/nb4_reference.json`): closed-loop
+  success at w = 0/1/3, 10 Euler steps: 16×16 12/86/92%, 64×64 12/77/97%; one Euler step at w = 3:
+  97% / 100%. A student model trained from scratch on CPU (3000 episodes, 5000 steps at batch 64,
+  ~12 min on 4 cores) reached 13/50/78% (32 mazes, one step).
+- History guidance does **not** help this model (the history is in the input channels): over frames
+  20–40, PSNR 15.2 / 15.0 / 14.3 / 12.8 dB at w = 1 / 1.5 / 2 / 3. The notebook says so.
+- Test runs: `QC_RES=64` forces the 64×64 setting. On CPU the 64×64 path is slow (minutes per part).
+- molab: the notebook has a PEP 723 header and clones the repository if `course` is missing. It needs
+  the GitHub repository to be public. Not yet tried on molab itself.

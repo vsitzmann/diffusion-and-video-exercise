@@ -26,12 +26,13 @@ def _(mo):
     instead builds a *path* from noise to data and learns to follow it in many small steps. Each
     step only asks one *local* question: "given this noisy point, where is the data?".
 
-    We use the notation of the lecture (MIT 6.S184). **Careful: from now on $z$ is a data point**,
-    not the noise.
+    Notation: as in notebook 1, $x$ is data and $\epsilon$ is noise. We follow Lipman et al.
+    (*Flow Matching for Generative Modeling*, 2023). A time $t$ runs from noise ($t = 0$) to data ($t = 1$):
 
-    - Noise: $X_0 \sim p_{\text{init}} = \mathcal N(0, I)$ at time $t = 0$.
-    - Data: $z \sim p_{\text{data}}$, reached at $t = 1$.
-    - Conditional (Gaussian) probability path: $p_t(x \mid z) = \mathcal N(\alpha_t z,\ \beta_t^2 I)$,
+    - Noise: $x_0 = \epsilon \sim \mathcal N(0, I)$ at time $t = 0$.
+    - Data: $x_1 \sim p_{\text{data}}$, reached at $t = 1$.
+    - $x$ (or $x_t$) is the point that moves from noise to data in between.
+    - Conditional (Gaussian) probability path: $p_t(x \mid x_1) = \mathcal N(\alpha_t x_1,\ \beta_t^2 I)$,
       and we use the simplest schedule $\alpha_t = t$, $\beta_t = 1 - t$.
 
     Time: about 25 minutes. Same rules as before: ✏️ marks an exercise, and the switch uses the
@@ -50,9 +51,9 @@ def _(check, mo, toys):
 
 @app.cell(hide_code=True)
 def _(toy, toys):
-    # The training set: a fixed, finite set of data points z_1..z_N.
-    Z = toys.sample(toy.value, 1000, seed=0)
-    return (Z,)
+    # The training set: a fixed, finite set of data points x_1^(1), ..., x_1^(N).
+    X1 = toys.sample(toy.value, 1000, seed=0)
+    return (X1,)
 
 
 @app.cell(hide_code=True)
@@ -60,13 +61,13 @@ def _(mo):
     mo.md(r"""
     ## Part 1 · The forward process: from data to noise
 
-    To get a point on the conditional path at time $t$, take a data point $z$ and mix it with noise:
+    To get a point on the conditional path at time $t$, take a data point $x_1$ and mix it with noise:
 
     $$
-    x = \alpha_t z + \beta_t \epsilon = t\, z + (1 - t)\, \epsilon, \qquad \epsilon \sim \mathcal N(0, I).
+    x_t = \alpha_t x_1 + \beta_t \epsilon = t\, x_1 + (1 - t)\, \epsilon, \qquad \epsilon \sim \mathcal N(0, I).
     $$
 
-    Doing this for all data points gives the **marginal** path $p_t(x) = \int p_t(x \mid z)\, p_{\text{data}}(z)\, \mathrm dz$,
+    Doing this for all data points gives the **marginal** path $p_t(x) = \int p_t(x \mid x_1)\, p_{\text{data}}(x_1)\, \mathrm dx_1$,
     which slides from pure noise ($t=0$) to the data ($t=1$).
 
     ### ✏️ Exercise A
@@ -76,8 +77,9 @@ def _(mo):
 
 @app.cell
 def _():
-    def conditional_path(z, t, eps):
-        """Sample x ~ p_t(x | z). z, eps: (N, 2); t: a number or an (N, 1) tensor."""
+    def conditional_path(x1, t, eps):
+        """Sample x_t ~ p_t(x | x1). x1 (data points) and eps (noise): (N, 2);
+        t: a number or an (N, 1) tensor."""
         # ✏️ your code here
         raise NotImplementedError
     return (conditional_path,)
@@ -92,13 +94,13 @@ def _(check, conditional_path, use_solutions):
 
 
 @app.cell(hide_code=True)
-def _(Z, conditional_path_impl, mo, ok_A, plots, plt, torch):
+def _(X1, conditional_path_impl, mo, ok_A, plots, plt, torch):
     mo.stop(not ok_A)
-    _eps = torch.randn(Z.shape, generator=torch.Generator().manual_seed(0))
+    _eps = torch.randn(X1.shape, generator=torch.Generator().manual_seed(0))
     _ts = [1.0, 0.8, 0.6, 0.4, 0.2, 0.0]
     _fig, _axes = plt.subplots(1, len(_ts), figsize=(2.0 * len(_ts), 2.2))
     for _ax, _t in zip(_axes, _ts):
-        plots.scatter(_ax, conditional_path_impl(Z, _t, _eps), plots.ACCENT, s=2)
+        plots.scatter(_ax, conditional_path_impl(X1, _t, _eps), plots.ACCENT, s=2)
         plots.square(_ax, lim=3.5, title=f"t = {_t}")
     _fig.suptitle("Forward (noising) process: the marginal path p_t, from data (t = 1) to noise (t = 0)", fontsize=9)
     _fig.tight_layout()
@@ -111,11 +113,11 @@ def _(mo):
     mo.md(r"""
     ## Part 2 · The conditional vector field
 
-    If we knew which data point $z$ we are heading to, following the path would be easy. The
-    lecture gives the velocity that moves $x$ along $p_t(\cdot \mid z)$:
+    If we knew which data point $x_1$ we are heading to, following the path would be easy. The
+    lecture gives the velocity that moves $x$ along $p_t(\cdot \mid x_1)$:
 
     $$
-    u_t^{\text{target}}(x \mid z) = \Big(\dot\alpha_t - \frac{\dot\beta_t}{\beta_t}\alpha_t\Big) z + \frac{\dot\beta_t}{\beta_t}\, x .
+    u_t^{\text{target}}(x \mid x_1) = \Big(\dot\alpha_t - \frac{\dot\beta_t}{\beta_t}\alpha_t\Big) x_1 + \frac{\dot\beta_t}{\beta_t}\, x .
     $$
 
     ### ✏️ Exercise B
@@ -128,8 +130,9 @@ def _(mo):
 
 @app.cell
 def _():
-    def conditional_velocity(x, z, t):
-        """u_t(x | z) for alpha_t = t, beta_t = 1 - t. x, z: (N, 2); t: number or (N, 1)."""
+    def conditional_velocity(x, x1, t):
+        """u_t(x | x1) for alpha_t = t, beta_t = 1 - t. x (moving point), x1 (data point): (N, 2);
+        t: number or (N, 1)."""
         # ✏️ your code here
         raise NotImplementedError
     return (conditional_velocity,)
@@ -144,23 +147,23 @@ def _(check, conditional_velocity, use_solutions):
 
 
 @app.cell(hide_code=True)
-def _(Z, conditional_velocity_impl, mo, ok_B, plots, plt, torch):
+def _(X1, conditional_velocity_impl, mo, ok_B, plots, plt, torch):
     mo.stop(not ok_B)
-    _z = Z[:1]  # one data point
+    _x1 = X1[:1]  # one data point
     _x = torch.randn(40, 2, generator=torch.Generator().manual_seed(1))
     _traj = [_x]
     for _i in range(50):
         _t = _i / 50
-        _x = _x + (1 / 50) * conditional_velocity_impl(_x, _z, _t)
+        _x = _x + (1 / 50) * conditional_velocity_impl(_x, _x1, _t)
         _traj.append(_x)
     _fig, _ax = plt.subplots(figsize=(3.2, 3.2))
-    plots.scatter(_ax, Z, plots.DATA, s=2, alpha=0.4)
+    plots.scatter(_ax, X1, plots.DATA, s=2, alpha=0.4)
     plots.trajectories(_ax, torch.stack(_traj), plots.ACCENT, n=40)
-    _ax.scatter(*_z[0], marker="*", s=150, c="k", zorder=4)
-    plots.square(_ax, lim=3.5, title="Conditional flow paths to one z (star)")
+    _ax.scatter(*_x1[0], marker="*", s=150, c="k", zorder=4)
+    plots.square(_ax, lim=3.5, title="Conditional flow paths to one x₁ (star)")
     mo.hstack([_fig, mo.md(r"""
-    Starting from 40 noise samples (grey dots) and following $u_t(x \mid z)$, every path is a
-    **straight line** into the star. But to sample, we don't get to choose $z$: that is
+    Starting from 40 noise samples (grey dots) and following $u_t(x \mid x_1)$, every path is a
+    **straight line** into the star. But to sample, we don't get to choose $x_1$: that is
     exactly what we want the model to produce. We need a velocity that only depends on $x$.
     """)], justify="start")
     return
@@ -171,20 +174,20 @@ def _(mo):
     mo.md(r"""
     ## Part 3 · The posterior: which data point did this noisy point come from?
 
-    Given a noisy point $x$ at time $t$, Bayes' rule tells us how likely each training point
-    $z_i$ is to be its origin:
+    Call the training points $x_1^{(1)}, \dots, x_1^{(N)}$. Given a noisy point $x$ at time $t$,
+    Bayes' rule tells us how likely each training point $x_1^{(i)}$ is to be its origin:
 
     $$
-    p(z_i \mid X_t = x) = \frac{p_t(x \mid z_i)}{\sum_j p_t(x \mid z_j)}
-    = \operatorname{softmax}_i\!\Big( -\frac{\|x - t\, z_i\|^2}{2(1-t)^2} \Big).
+    p(x_1^{(i)} \mid X_t = x) = \frac{p_t(x \mid x_1^{(i)})}{\sum_j p_t(x \mid x_1^{(j)})}
+    = \operatorname{softmax}_i\!\Big( -\frac{\|x - t\, x_1^{(i)}\|^2}{2(1-t)^2} \Big).
     $$
 
-    Its mean, $\hat z(x, t) = \mathbb E[z \mid X_t = x] = \sum_i p(z_i \mid x)\, z_i$, is the **best
-    denoised guess** of the clean data. This is what a "denoiser" network learns.
+    Its mean, $\hat x_1(x, t) = \mathbb E[x_1 \mid X_t = x] = \sum_i p(x_1^{(i)} \mid X_t = x)\, x_1^{(i)}$,
+    is the **best denoised guess** of the clean data. This is what a "denoiser" network learns.
 
     ### ✏️ Exercise C
 
-    `x` has shape `(N, 2)`, `Z` holds the training set `(M, 2)`. Return the `(N, M)` matrix of
+    `x` has shape `(N, 2)`, `X1` holds the training set `(M, 2)`. Return the `(N, M)` matrix of
     posterior weights (each row sums to 1).
     """)
     return
@@ -192,8 +195,9 @@ def _(mo):
 
 @app.cell
 def _():
-    def posterior_weights(x, t, Z):
-        """p(z_i | X_t = x) for all x (rows) and training points z_i (columns). t is a number."""
+    def posterior_weights(x, t, X1):
+        """p(x1^(i) | X_t = x) for all x (rows) and training points x1^(i) (the rows of X1;
+        columns of the output). t is a number."""
         # ✏️ your code here (hint: torch.cdist and torch.softmax)
         raise NotImplementedError
     return (posterior_weights,)
@@ -209,41 +213,55 @@ def _(check, posterior_weights, use_solutions):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.callout(mo.vstack([
+        mo.md(r"""
+        **🤔 Predict first.** Take a time $t$ close to $0$, so that $x$ is almost pure noise. Where
+        will the posterior mean $\hat x_1$ be? Does it matter where you put $x$? And what happens as
+        $t$ goes to $1$?
+        """),
+        mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+        - **$t$ near 0:** $x$ says almost nothing about $x_1$. The posterior is spread over the
+          whole dataset, and $\hat x_1$ sits near the **mean of the data**, wherever you put $x$.
+          At $t = 0$ exactly, $p(x_1 \mid X_0 = x) = p_{\text{data}}(x_1)$ and $\hat x_1$ *is* the
+          mean. That is the blurry answer of notebook 1, Part 1!
+        - **$t$ near 1:** the posterior focuses on a few training points near $x/t$, and
+          $\hat x_1$ moves onto the data.
+        """)}),
+    ]), kind="info")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     t_post = mo.ui.slider(0.0, 0.98, step=0.02, value=0.5, label="time t", show_value=True)
-    qx = mo.ui.slider(-3.0, 3.0, step=0.1, value=1.0, label="noisy point x₁", show_value=True)
-    qy = mo.ui.slider(-3.0, 3.0, step=0.1, value=0.3, label="noisy point x₂", show_value=True)
+    qx = mo.ui.slider(-3.0, 3.0, step=0.1, value=1.0, label="noisy point x: horizontal", show_value=True)
+    qy = mo.ui.slider(-3.0, 3.0, step=0.1, value=0.3, label="vertical", show_value=True)
     mo.hstack([t_post, qx, qy], justify="start", gap=1)
     return qx, qy, t_post
 
 
 @app.cell(hide_code=True)
-def _(Z, mo, ok_C, plots, plt, posterior_weights_impl, qx, qy, t_post, torch):
+def _(X1, mo, ok_C, plots, plt, posterior_weights_impl, qx, qy, t_post, torch):
     mo.stop(not ok_C)
     _t = t_post.value
     _x = torch.tensor([[qx.value, qy.value]])
-    _w = posterior_weights_impl(_x, _t, Z)[0]
-    _zhat = _w @ Z
+    _w = posterior_weights_impl(_x, _t, X1)[0]
+    _x1hat = _w @ X1
     _fig, _axes = plt.subplots(1, 2, figsize=(6.6, 3.3))
     _ax = _axes[0]
     _order = _w.argsort()
-    _ax.scatter(Z[_order, 0], Z[_order, 1], c=_w[_order], cmap="magma_r", s=6, vmin=0, vmax=max(_w.max().item(), 1e-3))
+    _ax.scatter(X1[_order, 0], X1[_order, 1], c=_w[_order], cmap="magma_r", s=6, vmin=0, vmax=max(_w.max().item(), 1e-3))
     _ax.scatter(*_x[0], marker="x", s=80, c=plots.ACCENT, label="noisy point x")
-    _ax.scatter(*_zhat, marker="*", s=160, c="k", label="posterior mean ẑ")
+    _ax.scatter(*_x1hat, marker="*", s=160, c="k", label="posterior mean x̂₁")
     _ax.legend(loc="lower left", fontsize=7)
-    plots.square(_ax, lim=3.1, title=f"posterior p(z | x) at t = {_t:.2f}")
+    plots.square(_ax, lim=3.1, title=f"posterior p(x₁ | x) at t = {_t:.2f}")
     _ax = _axes[1]
     _ax.plot(_w.sort(descending=True).values[:50].numpy(), color=plots.ACCENT)
     _ax.set_title("the 50 largest weights")
     _ax.set_xlabel("rank")
     _fig.tight_layout()
     mo.vstack([_fig, mo.md(r"""
-    Move the sliders.
-
-    - **Small $t$** (mostly noise): $x$ says almost nothing about $z$. The posterior is spread over
-      the whole dataset, and $\hat z$ sits near the **mean of the data**. That is exactly the blurry
-      answer of notebook 1, Part 1!
-    - **Large $t$**: the posterior focuses on a few training points near $x/t$, and
-      $\hat z$ moves onto the data.
+    Move the sliders and check your guess.
 
     Diffusion and flow matching never ask a network to solve the impossible problem in one
     step. At every $t$ they ask for the posterior mean, which is a well-posed regression.
@@ -256,14 +274,14 @@ def _(mo):
     mo.md(r"""
     ## Part 4 · The marginal vector field
 
-    We don't know $z$, so we average the conditional velocities over the posterior:
+    We don't know $x_1$, so we average the conditional velocities over the posterior:
 
     $$
-    u_t^{\text{target}}(x) = \int u_t^{\text{target}}(x \mid z)\, \frac{p_t(x \mid z)\, p_{\text{data}}(z)}{p_t(x)}\, \mathrm dz
-    = \sum_i p(z_i \mid X_t = x)\, \frac{z_i - x}{1 - t} = \frac{\hat z(x, t) - x}{1 - t}.
+    u_t^{\text{target}}(x) = \int u_t^{\text{target}}(x \mid x_1)\, \frac{p_t(x \mid x_1)\, p_{\text{data}}(x_1)}{p_t(x)}\, \mathrm dx_1
+    = \sum_i p(x_1^{(i)} \mid X_t = x)\, \frac{x_1^{(i)} - x}{1 - t} = \frac{\hat x_1(x, t) - x}{1 - t}.
     $$
 
-    The lecture's theorem: following this field from $X_0 \sim p_{\text{init}}$ gives
+    The lecture's theorem: following this field from $X_0 = \epsilon \sim \mathcal N(0, I)$ gives
     $X_t \sim p_t$ for all $t$, so $X_1 \sim p_{\text{data}}$.
 
     ### ✏️ Exercise D
@@ -273,8 +291,8 @@ def _(mo):
 
 @app.cell
 def _(posterior_weights_impl):
-    def marginal_velocity(x, t, Z):
-        """u_t(x) = (posterior mean - x) / (1 - t). Use posterior_weights_impl(x, t, Z)."""
+    def marginal_velocity(x, t, X1):
+        """u_t(x) = (posterior mean - x) / (1 - t). Use posterior_weights_impl(x, t, X1)."""
         # ✏️ your code here
         raise NotImplementedError
     return (marginal_velocity,)
@@ -290,34 +308,53 @@ def _(check, marginal_velocity, use_solutions):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.callout(mo.vstack([
+        mo.md(r"""
+        **🤔 Predict first.** Below we start from fresh noise and follow the *exact* marginal field
+        of our 1000 training points to $t = 1$. Where will the end points land? Will they be new
+        samples from the toy distribution?
+        """),
+        mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+        They land on the **training points themselves**, not on new points between them. The field
+        is built from the 1000 training points only, so it transports the noise onto the
+        *empirical* distribution: 1000 spikes, one per training point. Near $t = 1$ the posterior
+        puts all its weight on one training point (Part 3), and the field pulls $x$ straight onto
+        it. The cell after the plot measures how close they get.
+        """)}),
+    ]), kind="info")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     t_field = mo.ui.slider(0.0, 0.95, step=0.05, value=0.6, label="time t for the vector field", show_value=True)
     t_field
     return (t_field,)
 
 
 @app.cell(hide_code=True)
-def _(Z, marginal_velocity_impl, mo, ok_D, plots, plt, t_field, torch):
+def _(X1, marginal_velocity_impl, mo, ok_D, plots, plt, t_field, torch):
     mo.stop(not ok_D)
     # integrate the exact marginal ODE (on the training set) from noise
     _x = torch.randn(400, 2, generator=torch.Generator().manual_seed(2))
     _traj = [_x]
     _n = 100
     for _i in range(_n):
-        _x = _x + (1 / _n) * marginal_velocity_impl(_x, _i / _n, Z)
+        _x = _x + (1 / _n) * marginal_velocity_impl(_x, _i / _n, X1)
         _traj.append(_x)
     exact_traj = torch.stack(_traj)
     _fig, _axes = plt.subplots(1, 2, figsize=(6.8, 3.4))
     _ax = _axes[0]
     _g = torch.linspace(-3, 3, 21)
     _grid = torch.stack(torch.meshgrid(_g, _g, indexing="xy"), -1).reshape(-1, 2)
-    _v = marginal_velocity_impl(_grid, t_field.value, Z)
+    _v = marginal_velocity_impl(_grid, t_field.value, X1)
     _v = _v / (_v.norm(dim=1, keepdim=True) + 1e-6) * _v.norm(dim=1, keepdim=True).clamp(max=1.5)
-    plots.scatter(_ax, Z, plots.DATA, s=2, alpha=0.4)
+    plots.scatter(_ax, X1, plots.DATA, s=2, alpha=0.4)
     _ax.quiver(_grid[:, 0], _grid[:, 1], _v[:, 0], _v[:, 1], color=plots.ACCENT, angles="xy",
                scale_units="xy", scale=4, width=0.004)
     plots.square(_ax, lim=3.1, title=f"marginal field u_t(x) at t = {t_field.value:.2f}")
     _ax = _axes[1]
-    plots.scatter(_ax, Z, plots.DATA, s=2, alpha=0.4)
+    plots.scatter(_ax, X1, plots.DATA, s=2, alpha=0.4)
     plots.trajectories(_ax, exact_traj, plots.SAMPLE, n=80)
     plots.square(_ax, lim=3.1, title="marginal flow paths (exact field)")
     _fig.tight_layout()
@@ -326,14 +363,14 @@ def _(Z, marginal_velocity_impl, mo, ok_D, plots, plt, t_field, torch):
 
 
 @app.cell(hide_code=True)
-def _(Z, exact_traj, mo, torch):
-    _d = torch.cdist(exact_traj[-1], Z).min(1).values
+def _(X1, exact_traj, mo, torch):
+    _d = torch.cdist(exact_traj[-1], X1).min(1).values
     mo.md(rf"""
     Compare with Part 2: the **marginal** paths are curved and they fan out to every part of the
-    data, while each **conditional** path was a straight line to a fixed $z$.
+    data, while each **conditional** path was a straight line to a fixed $x_1$.
 
-    One more thing to notice: the median distance from an end point to its nearest training point
-    is **{_d.median():.4f}**. The exact marginal field for a finite training set lands *exactly on the
+    The median distance from an end point to its nearest training point is
+    **{_d.median():.4f}**. The exact marginal field for a finite training set lands *exactly on the
     training points*: it memorizes. A neural network trained on the same objective can't represent
     this field exactly (it is smoother), and that is where generalization comes from.
     """)
@@ -350,12 +387,12 @@ def _(mo):
     target, which needs just one data point at a time:
 
     $$
-    \mathcal L(\theta) = \mathbb E_{t \sim U[0,1],\ z \sim p_{\text{data}},\ \epsilon \sim \mathcal N(0,I)}
-    \big\| u_t^\theta(x) - u_t^{\text{target}}(x \mid z) \big\|^2,
-    \qquad x = t z + (1-t)\epsilon,
+    \mathcal L(\theta) = \mathbb E_{t \sim U[0,1],\ x_1 \sim p_{\text{data}},\ \epsilon \sim \mathcal N(0,I)}
+    \big\| u_t^\theta(x_t) - u_t^{\text{target}}(x_t \mid x_1) \big\|^2,
+    \qquad x_t = t\, x_1 + (1-t)\,\epsilon,
     $$
 
-    and for our schedule $u_t^{\text{target}}(x \mid z) = \frac{z - x}{1-t} = z - \epsilon$.
+    and for our schedule $u_t^{\text{target}}(x_t \mid x_1) = \frac{x_1 - x_t}{1-t} = x_1 - \epsilon$.
     The minimizer is the marginal field. Regression gives conditional means (notebook 1!), and the
     mean of the conditional velocity given $x$ is exactly $u_t^{\text{target}}(x)$.
 
@@ -364,16 +401,16 @@ def _(mo):
 
     ### ✏️ Exercise E
 
-    Implement one batch of the loss. `z` is `(B, D)`; draw `t` with shape `(B, 1)`.
+    Implement one batch of the loss. `x1` is a batch of data points, `(B, D)`; draw `t` with shape `(B, 1)`.
     """)
     return
 
 
 @app.cell
 def _(torch):
-    def flow_matching_loss(net, z):
-        """Draw t ~ U[0, 1] (shape (B, 1)) and eps ~ N(0, I), build x, and return the mean
-        squared error between net.velocity(x, t) and the target z - eps."""
+    def flow_matching_loss(net, x1):
+        """Draw t ~ U[0, 1] (shape (B, 1)) and eps ~ N(0, I), build x_t, and return the mean
+        squared error between net.velocity(x_t, t) and the target x1 - eps."""
         # ✏️ your code here (about 5 lines)
         raise NotImplementedError
     return (flow_matching_loss,)
@@ -446,12 +483,12 @@ def _(euler_sample_impl, mo, ok_E, ok_F, toy, toys, torch, train_flow):
 
 
 @app.cell(hide_code=True)
-def _(Z, flow_losses, flow_traj, mo, plots, plt):
+def _(X1, flow_losses, flow_traj, mo, plots, plt):
     _fig, _axes = plt.subplots(1, 3, figsize=(9.6, 3.2))
-    plots.scatter(_axes[0], Z, plots.DATA, s=2, alpha=0.5)
+    plots.scatter(_axes[0], X1, plots.DATA, s=2, alpha=0.5)
     plots.scatter(_axes[0], flow_traj[-1])
     plots.square(_axes[0], title="samples from the trained network")
-    plots.scatter(_axes[1], Z, plots.DATA, s=2, alpha=0.4)
+    plots.scatter(_axes[1], X1, plots.DATA, s=2, alpha=0.4)
     plots.trajectories(_axes[1], flow_traj, plots.SAMPLE, n=80)
     plots.square(_axes[1], lim=3.1, title="learned marginal flow paths")
     _l = flow_losses
@@ -462,7 +499,7 @@ def _(Z, flow_losses, flow_traj, mo, plots, plt):
     mo.vstack([
         _fig,
         mo.md("**The reverse process**: the same samples, moving from noise ($t=0$) to data ($t=1$)."),
-        (plots.animate_samples(list(flow_traj[::4]) + [flow_traj[-1]] * 5, Z,
+        (plots.animate_samples(list(flow_traj[::4]) + [flow_traj[-1]] * 5, X1,
                                       [f"t = {i * 4 / 100:.2f}" for i in range(26)] + ["t = 1.00"] * 5,
                                       interval=100)),
     ])
@@ -472,11 +509,81 @@ def _(Z, flow_losses, flow_traj, mo, plots, plt):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Why doesn't the loss go to zero? The target $z - \epsilon$ is random even for a fixed $x$
-    (many $(z, \epsilon)$ pairs give the same $x$), and the network can only learn its average.
+    Why doesn't the loss go to zero? The target $x_1 - \epsilon$ is random even for a fixed $x_t$
+    (many $(x_1, \epsilon)$ pairs give the same $x_t$), and the network can only learn its average.
     The remaining loss is the variance of the target, the same irreducible term as in notebook 1.
     The difference: here, *learning the average is exactly what we want*.
 
+    ### How many Euler steps do we need?
+
+    Above we sampled with $n = 100$ Euler steps. Plain Euler steps like these are what most
+    flow-matching models use in practice. But every step costs one evaluation of the network,
+    which for a large image or video model is expensive, so we want as few steps as possible.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.vstack([
+        mo.md(r"""
+        **🤔 Predict first.** What happens to the samples as you lower the number of steps $n$?
+        What do you get with a **single** step from pure noise?
+        """),
+        mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+        With **one step** ($h = 1$, from $t = 0$), the sample is $x_0 + u_0(x_0)$. At $t = 0$ the
+        point $x_0 = \epsilon$ is pure noise and says nothing about $x_1$, so the posterior mean is
+        just the data mean, $\hat x_1(x_0, 0) = \mathbb E[x_1]$, and
+
+        $$
+        x_0 + u_0(x_0) = x_0 + \big(\mathbb E[x_1] - x_0\big) = \mathbb E[x_1].
+        $$
+
+        **Every sample lands on the mean of the data**: the regression result of notebook 1, Part 1.
+
+        In general, one Euler step moves a fraction $\frac{h}{1-t}$ of the way to the current
+        denoised guess: $x + h\, u_t(x) = x + \frac{h}{1-t}\big(\hat x_1(x, t) - x\big)$. The last
+        step has $h = 1 - t$, so it lands exactly on $\hat x_1$, the posterior mean at the time of
+        the last step. With few steps that time is early, the posterior is still spread over several
+        modes, and the samples land between the modes. With more steps, the last guess is made close
+        to $t = 1$, where the posterior is sharp, and the samples separate into the modes. For the 8
+        gaussians the samples are already good at about 8 steps, and more steps change little.
+        """)}),
+    ]), kind="info")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    n_euler = mo.ui.slider(steps=[1, 2, 3, 4, 8, 16, 32, 100], value=1, label="number of Euler steps n", show_value=True)
+    n_euler
+    return (n_euler,)
+
+
+@app.cell(hide_code=True)
+def _(X1, euler_sample_impl, flow_net, mo, n_euler, plots, plt, torch):
+    with torch.no_grad():
+        _traj = euler_sample_impl(flow_net.velocity, torch.randn(1500, 2, generator=torch.Generator().manual_seed(3)), n_euler.value)
+    _fig, _axes = plt.subplots(1, 2, figsize=(6.6, 3.3))
+    for _ax in _axes:
+        plots.scatter(_ax, X1, plots.DATA, s=2, alpha=0.5)
+    plots.scatter(_axes[0], _traj[-1])
+    _axes[0].scatter(*X1.mean(0), marker="*", s=160, c="k", zorder=4, label="mean of the data")
+    _axes[0].legend(loc="lower left", fontsize=7)
+    plots.square(_axes[0], lim=3.1, title=f"samples with n = {n_euler.value}")
+    plots.trajectories(_axes[1], _traj, plots.SAMPLE, n=80)
+    plots.square(_axes[1], lim=3.1, title=f"paths: {n_euler.value} straight piece{'s' if n_euler.value > 1 else ''}")
+    _fig.tight_layout()
+    mo.vstack([_fig, mo.md(
+        f"Spread of the samples (standard deviation per coordinate): **{_traj[-1].std(0).mean():.2f}**, "
+        f"spread of the data: **{X1.std(0).mean():.2f}**. Move the slider."
+    )])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Part 6 · The high-dimensional test
 
     Now the setting where the drifting model of notebook 1 fell apart: the data hidden on a
@@ -490,12 +597,33 @@ def _(mo):
 def _(mo):
     mo.md(r"""
     One more ingredient. So far the network output the velocity directly ("$v$-prediction").
-    Alternatively it can output a guess $\hat z_\theta(x, t)$ of the **clean data point** and
-    convert it, $u^\theta_t(x) = (\hat z_\theta(x,t) - x)/(1-t)$, with the same loss as before
+    Alternatively it can output a guess $\hat x_{1,\theta}(x, t)$ of the **clean data point** and
+    convert it, $u^\theta_t(x) = (\hat x_{1,\theta}(x,t) - x)/(1-t)$, with the same loss as before
     ("$x$-prediction"; Li & He, *Back to Basics: Let Denoising Generative Models Denoise*, 2025,
     the "JiT" paper from Kaiming He's group). In 2D, $v$-prediction is actually the better choice. Below we
     train both.
     """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.vstack([
+        mo.md(r"""
+        **🤔 Predict first.** The data is a 2D sheet crumpled into $D = 256$ dimensions. Which of
+        $x$-prediction and $v$-prediction will work there: both, neither, or only one of them?
+        """),
+        mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+        Only **$x$-prediction**. Its samples cover every mode and lie close to the sheet.
+        $v$-prediction, the better choice in 2D, falls apart: its samples end up about as far from
+        the sheet as the blurry data mean.
+
+        The two networks are trained on the same loss, but they have to output different things.
+        The velocity target $x_1 - \epsilon$ contains the full $D$-dimensional noise, which a small
+        network struggles to represent. The clean data point $x_1$ lies on a 2D sheet, so
+        predicting it is a much simpler function.
+        """)}),
+    ]), kind="info")
     return
 
 
@@ -571,11 +699,10 @@ def _(mo):
     *local* problem with a well-defined answer at every noise level.
 
     **v-prediction falls apart** in high dimensions (its samples end up about as far from the sheet
-    as the blurry data mean), although it was the better choice in 2D. The velocity
-    $z - \epsilon$ contains the full $D$-dimensional noise, which a small network struggles to
-    represent, while the clean data lives on a 2D sheet: predicting the clean data is a much
-    simpler function. Lower $D$ with the slider and the gap shrinks. This is the point of the
-    JiT paper, and why it can train diffusion transformers directly on pixels.
+    as the blurry data mean), although it was the better choice in 2D. Its target $x_1 - \epsilon$
+    contains the full $D$-dimensional noise, while the clean data $x_1$ lives on a 2D sheet.
+    Lower $D$ with the slider and the gap shrinks. This is the point of the JiT paper, and why it
+    can train diffusion transformers directly on pixels.
 
     **Next:** notebook 3 trains the same kind of model on video.
     """)

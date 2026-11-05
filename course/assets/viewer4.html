@@ -1,0 +1,335 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  .nb4 { display: flex; flex-direction: column; gap: 12px; font-family: var(--font-sans, system-ui); color: var(--foreground, #ddd); }
+  .nb4 .bar { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .nb4 button { font: inherit; padding: 4px 12px; border-radius: var(--radius, 6px); border: 1px solid var(--border, #444);
+    background: var(--secondary, #2a2a2a); color: var(--secondary-foreground, #eee); cursor: pointer; }
+  .nb4 button.on { background: var(--primary, #4a7); color: var(--primary-foreground, #fff); border-color: transparent; }
+  .nb4 input[type=range] { flex: 1; }
+  .nb4 .muted { color: var(--muted-foreground, #999); font-variant-numeric: tabular-nums; }
+  .nb4 .row { display: flex; gap: 12px; }
+  .nb4 .panel { display: flex; flex-direction: column; gap: 6px; }
+  .nb4 .lab { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground, #999); }
+  .nb4 canvas.px { image-rendering: pixelated; border-radius: 8px; display: block; }
+  .nb4 .act { font-size: 13px; display: flex; gap: 6px; }
+  .nb4 .act span { padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border, #444); color: var(--muted-foreground, #999); }
+  .nb4 .act span.cur { background: #ff47a0; border-color: #ff47a0; color: #fff; }
+  .nb4 .strip { display: flex; gap: 4px; }
+  .nb4 .strip canvas { width: 84px; height: 84px; border-radius: 5px; }
+  .nb4 svg { border-radius: 10px; display: block; }
+  .nb4 #three { position: relative; height: 430px; border-radius: 10px; overflow: hidden;
+    background: linear-gradient(#4f7fc6, #c9d4e2 70%); }
+  .nb4 #three canvas { display: block; }
+</style>
+</head><body>
+<div class="nb4">
+  <div class="bar">
+    <button id="play" class="on">Pause</button>
+    <input id="scrub" type="range" min="0" value="0">
+    <span class="muted" id="count"></span><span class="muted" id="caption"></span>
+    <button id="follow">Follow camera</button>
+  </div>
+  <div class="row">
+    <div class="panel">
+      <div class="lab">What the agent sees · 64×64</div>
+      <canvas id="view" class="px" width="64" height="64" style="width:300px;height:300px"></canvas>
+      <div class="act" id="act"><span>↑ forward</span><span>↶ left</span><span>↷ right</span></div>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="lab">Map</div>
+      <svg id="map" width="100%" style="aspect-ratio:1"></svg>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="lab">STRIP_TITLE <span id="planinfo" style="text-transform:none;letter-spacing:0"></span></div>
+    <div class="strip" id="strip"></div>
+  </div>
+  <div class="panel">
+    <div class="lab">3/4 view · drag to orbit</div>
+    <div id="three"></div>
+  </div>
+</div>
+<img id="sheet" src="SHEET_SRC" style="display:none"><img id="isheet" src="ISHEET_SRC" style="display:none">
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const DATA = DATA_JSON;
+const STEP = 0.15, TURN = Math.PI / 16, RADIUS = 0.2, FOV = 1.3, T = Math.tan(FOV / 2), EYE = 0.5;
+const WALL = ['#000', '#cc6b4f', '#75a16e', '#577db8', '#e0b352', '#d6ccb8'];
+const GOAL = '#ff47a0', PLAN = 8, GHOST = 30;
+const grid = DATA.grid.map(r => [...r].map(Number));
+const GY = grid.length, GX = grid[0].length;
+
+// ---- replay the expert's actions with mazeworld's dynamics
+const wall = (x, y) => x < 0 || y < 0 || x >= GX || y >= GY || grid[y][x] > 0;
+const blocked = (x, y) => [-RADIUS, RADIUS].some(ox => [-RADIUS, RADIUS].some(oy => wall(Math.floor(x + ox), Math.floor(y + oy))));
+const wrap = a => (((a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+const poses = [DATA.start];
+for (const c of DATA.actions) {
+  let [x, y, a] = poses[poses.length - 1];
+  if (c === 'F') { const nx = x + STEP * Math.cos(a), ny = y + STEP * Math.sin(a); if (!blocked(nx, ny)) { x = nx; y = ny; } }
+  else a += c === 'L' ? -TURN : TURN;
+  poses.push([x, y, wrap(a)]);
+}
+const N = poses.length;
+
+// ---- DDA raycast, for the view cone on the map
+function cast(x, y, rdx, rdy) {
+  let mx = Math.floor(x), my = Math.floor(y);
+  const ddx = Math.abs(1 / rdx), ddy = Math.abs(1 / rdy), sx = rdx < 0 ? -1 : 1, sy = rdy < 0 ? -1 : 1;
+  let sdx = rdx < 0 ? (x - mx) * ddx : (mx + 1 - x) * ddx, sdy = rdy < 0 ? (y - my) * ddy : (my + 1 - y) * ddy, side = 0;
+  for (let i = 0; i < 64; i++) {
+    if (sdx < sdy) { sdx += ddx; mx += sx; side = 0; } else { sdy += ddy; my += sy; side = 1; }
+    if (wall(mx, my)) break;
+  }
+  const d = side === 0 ? sdx - ddx : sdy - ddy;
+  return [x + d * rdx, y + d * rdy];
+}
+function cone([x, y, a], n = 48) {
+  const dx = Math.cos(a), dy = Math.sin(a), pts = [[x, y]];
+  for (let i = 0; i < n; i++) { const c = (2 * (i + .5) / n - 1) * T; pts.push(cast(x, y, dx - dy * c, dy + dx * c)); }
+  return pts;
+}
+
+// ---- frames from the sprite sheet
+const sheet = document.getElementById('sheet');
+function drawFrame(ctx, i) {
+  i = Math.min(i, N - 1);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sheet, (i % DATA.cols) * 64, Math.floor(i / DATA.cols) * 64, 64, 64, 0, 0, 64, 64);
+}
+const view = document.getElementById('view').getContext('2d');
+const isheet = document.getElementById('isheet'), IS = DATA.isize;
+const stripLabels = [];
+const strip = [...Array(DATA.H)].map(() => {
+  const w = document.createElement('div'); w.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px';
+  const c = document.createElement('canvas'); c.width = c.height = IS; c.className = 'px';
+  const l = document.createElement('div'); l.style.cssText = 'font-size:11px;color:var(--muted-foreground,#999)';
+  w.append(c, l); document.getElementById('strip').appendChild(w); stripLabels.push(l); return c.getContext('2d');
+});
+function drawImagined(ctx, j) {
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(isheet, (j % DATA.icols) * IS, Math.floor(j / DATA.icols) * IS, IS, IS, 0, 0, IS, IS);
+}
+const ARROW = ['↑', '↶', '↷'];
+function simulate(p, acts) {
+  const out = [p];
+  for (const c of acts) {
+    let [x, y, a] = out[out.length - 1];
+    if (c === 'F') { const nx = x + STEP * Math.cos(a), ny = y + STEP * Math.sin(a); if (!blocked(nx, ny)) { x = nx; y = ny; } }
+    else a += c === 'L' ? -TURN : TURN;
+    out.push([x, y, wrap(a)]);
+  }
+  return out;
+}
+function planAt(i) { let p = null; for (const q of DATA.plans) if (q.t <= i) p = q; return p; }
+
+// ---- map (SVG)
+const NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('map');
+const el = (tag, attrs, parent = svg) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+svg.setAttribute('viewBox', `-0.15 -0.15 ${GX + 0.3} ${GY + 0.45}`);
+svg.innerHTML = `<defs>
+  <pattern id="tiles" width="1" height="1" patternUnits="userSpaceOnUse">
+    <rect width="1" height="1" fill="#8d8476"/><rect width=".5" height=".5" fill="#857c6f"/><rect x=".5" y=".5" width=".5" height=".5" fill="#857c6f"/></pattern>
+  <radialGradient id="coneg" gradientUnits="userSpaceOnUse" r="7"><stop offset="0" stop-color="#fff" stop-opacity=".75"/><stop offset="1" stop-color="#fff" stop-opacity=".12"/></radialGradient>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation=".08"/></filter>
+  <style>@keyframes pulse { from { r: .2; opacity: .9 } to { r: .55; opacity: 0 } } .halo { animation: pulse 1.6s ease-out infinite }</style>
+</defs>`;
+el('rect', { x: -0.15, y: -0.15, width: GX + 0.3, height: GY + 0.45, fill: '#2d2a27' });
+el('rect', { x: 0, y: 0, width: GX, height: GY, fill: 'url(#tiles)' });
+const shadows = el('g', { filter: 'url(#soft)', opacity: .45 });
+const coneEl = el('polygon', { fill: 'url(#coneg)' });
+const pastAll = el('polyline', { fill: 'none', stroke: '#fff', 'stroke-opacity': .35, 'stroke-width': .07, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+const pastRecent = el('polyline', { fill: 'none', stroke: '#fff', 'stroke-width': .09, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+const ghost = el('polyline', { fill: 'none', stroke: GOAL, 'stroke-width': .09, 'stroke-dasharray': '.12 .12', 'stroke-linecap': 'round' });
+const walls = el('g', {});
+for (let y = 0; y < GY; y++) for (let x = 0; x < GX; x++) if (grid[y][x]) {
+  el('rect', { x: x + .1, y: y + .2, width: 1, height: 1, rx: .1, fill: '#000' }, shadows);
+  const c = new THREE.Color(WALL[grid[y][x]]);
+  el('rect', { x: x + .03, y: y + .03 + .13, width: .94, height: .94, rx: .1, fill: '#' + c.clone().multiplyScalar(.62).getHexString() }, walls);
+  el('rect', { x: x + .03, y: y + .03, width: .94, height: .94, rx: .1, fill: WALL[grid[y][x]] }, walls);
+}
+const [gx, gy] = DATA.goal;
+el('circle', { cx: gx, cy: gy, r: .2, fill: 'none', stroke: GOAL, 'stroke-width': .06, class: 'halo' });
+el('circle', { cx: gx, cy: gy, r: .19, fill: GOAL, stroke: '#fff', 'stroke-width': .05 });
+const agent = el('g', {});
+el('circle', { r: .2, fill: '#fff', stroke: '#2d2a27', 'stroke-width': .05 }, agent);
+el('path', { d: 'M .08 -.11 L .3 0 L .08 .11 Z', fill: '#2d2a27' }, agent);
+const pts = ps => ps.map(p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(' ');
+
+// ---- 3/4 view (three.js)
+const box = document.getElementById('three');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+box.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xc9d4e2, 18, 40);
+const cam = new THREE.PerspectiveCamera(38, 1, 0.05, 100);
+const center = new THREE.Vector3(GX / 2, 0, GY / 2);
+const HOME = new THREE.Vector3(GX / 2 + 4, 15, GY / 2 + 15.5);
+cam.position.copy(HOME);
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.target.copy(center); controls.enableDamping = true; controls.maxPolarAngle = 1.35;
+
+scene.add(new THREE.HemisphereLight(0xdfe8f5, 0x6b6052, 1.4));
+const sun = new THREE.DirectionalLight(0xfff1dc, 2.4);
+sun.position.set(GX / 2 + 0.55 * 9, 12, GY / 2 + 0.83 * 9); sun.target.position.copy(center);
+sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -11, right: 11, top: 11, bottom: -11, near: 1, far: 40 });
+sun.shadow.bias = -0.0005; sun.shadow.radius = 3;
+scene.add(sun, sun.target);
+
+function canvasTex(size, draw, repeat) {
+  const c = document.createElement('canvas'); c.width = c.height = size; draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  if (repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(...repeat); }
+  return t;
+}
+const brick = canvasTex(256, (g, s) => {
+  g.fillStyle = '#b8b8b8'; g.fillRect(0, 0, s, s);
+  for (let c = 0; c < 3; c++) for (let b = -1; b < 2; b++) {
+    const off = (c % 2) * 0.25, x0 = (b * 0.5 + off) * s, y0 = c * s / 3;
+    const l = 228 + Math.round(27 * Math.random()); g.fillStyle = `rgb(${l},${l},${l})`;
+    g.fillRect(x0 + 4, y0 + 4, s / 2 - 8, s / 3 - 8);
+  }
+  g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0, 0, 4, s); g.fillRect(s - 4, 0, 4, s);
+});
+const floorTex = canvasTex(128, (g, s) => {
+  g.fillStyle = '#9e9485'; g.fillRect(0, 0, s, s); g.fillStyle = '#8c8275';
+  g.fillRect(0, 0, s / 2, s / 2); g.fillRect(s / 2, s / 2, s / 2, s / 2);
+  g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 2; for (const v of [1, s / 2]) { g.strokeRect(v - 1, -1, s / 2, s + 2); g.strokeRect(-1, v - 1, s + 2, s / 2); }
+}, [GX, GY]);
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(GX, GY), new THREE.MeshStandardMaterial({ map: floorTex, roughness: .95 }));
+floor.rotation.x = -Math.PI / 2; floor.position.copy(center); floor.receiveShadow = true; scene.add(floor);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(40, 64), new THREE.MeshStandardMaterial({ color: 0x7d8a6a, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2; ground.position.set(GX / 2, -0.01, GY / 2); ground.receiveShadow = true; scene.add(ground);
+
+const nWalls = grid.flat().filter(v => v).length;
+const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), [0, 1, 2, 3, 4, 5].map(f => new THREE.MeshStandardMaterial(f === 2 ? { color: 0xf2efe8, roughness: .7 } : { map: brick, roughness: .85 })), nWalls);
+wallMesh.castShadow = wallMesh.receiveShadow = true;
+{ let i = 0; const m = new THREE.Matrix4();
+  for (let y = 0; y < GY; y++) for (let x = 0; x < GX; x++) if (grid[y][x]) {
+    m.makeTranslation(x + .5, .5, y + .5); wallMesh.setMatrixAt(i, m);
+    wallMesh.setColorAt(i++, new THREE.Color(WALL[grid[y][x]])); } }
+scene.add(wallMesh);
+
+// goal: orb, beam, floor ring
+const goalMat = new THREE.MeshStandardMaterial({ color: GOAL, emissive: GOAL, emissiveIntensity: 1.2 });
+const orb = new THREE.Mesh(new THREE.SphereGeometry(.17, 32, 16), goalMat); orb.position.set(gx, EYE, gy); scene.add(orb);
+const beam = new THREE.Mesh(new THREE.CylinderGeometry(.035, .035, 4, 12, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0xffb3da, transparent: true, opacity: .55, blending: THREE.AdditiveBlending, depthWrite: false }));
+beam.position.set(gx, 2, gy); scene.add(beam);
+const ring = new THREE.Mesh(new THREE.RingGeometry(.2, .3, 48), new THREE.MeshBasicMaterial({ color: GOAL, side: THREE.DoubleSide }));
+ring.rotation.x = -Math.PI / 2; ring.position.set(gx, .012, gy); scene.add(ring);
+const glow = new THREE.PointLight(GOAL, 2.5, 3); glow.position.set(gx, EYE, gy); scene.add(glow);
+
+// trail and plan as dots on the floor
+function dots(color, r, opacity) {
+  const m = new THREE.InstancedMesh(new THREE.CircleGeometry(r, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }), N);
+  const q = new THREE.Matrix4(); poses.forEach((p, i) => { q.makeRotationX(-Math.PI / 2).setPosition(p[0], .02, p[1]); m.setMatrixAt(i, q); });
+  m.count = 0; scene.add(m); return m;
+}
+const trail = dots(0xffffff, .045, .9), plan = dots(GOAL, .04, .85);
+
+// the camera: a small body, a frustum, and the current frame on its image plane
+const F = .7, LIFT = 1.45;  // the frustum floats above the walls, tethered to the agent
+const body = new THREE.Mesh(new THREE.SphereGeometry(.07, 16, 8), new THREE.MeshStandardMaterial({ color: 0x2d2a27 })); body.castShadow = true; scene.add(body);
+const lines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: .9 }));
+lines.geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(18 * 3), 3)); scene.add(lines);
+const sides = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .13, side: THREE.DoubleSide, depthWrite: false }));
+sides.geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12 * 3), 3)); scene.add(sides);
+const imgCanvas = document.createElement('canvas'); imgCanvas.width = imgCanvas.height = 64;
+const imgCtx = imgCanvas.getContext('2d');
+const imgTex = new THREE.CanvasTexture(imgCanvas); imgTex.magFilter = imgTex.minFilter = THREE.NearestFilter; imgTex.colorSpace = THREE.SRGBColorSpace;
+const plane = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ map: imgTex, side: THREE.DoubleSide, toneMapped: false }));
+plane.geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(4 * 3), 3));
+plane.geometry.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 1, 0, 0, 0], 2));
+plane.geometry.setIndex([0, 2, 1, 0, 3, 2]); scene.add(plane);
+
+function placeCamera([x, y, a]) {
+  const E = new THREE.Vector3(x, LIFT, y), D = new THREE.Vector3(Math.cos(a), 0, Math.sin(a)), P = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), U = new THREE.Vector3(0, 1, 0);
+  const corner = (sx, sy) => E.clone().addScaledVector(D, F).addScaledVector(P, sx * F * T).addScaledVector(U, sy * F * T);
+  const c = [corner(-1, 1), corner(1, 1), corner(1, -1), corner(-1, -1)];  // TL TR BR BL
+  body.position.copy(E);
+  const L = [new THREE.Vector3(x, .02, y), E]; for (let i = 0; i < 4; i++) L.push(E, c[i], c[i], c[(i + 1) % 4]);
+  lines.geometry.attributes.position.array.set(L.flatMap(v => v.toArray())); lines.geometry.attributes.position.needsUpdate = true;
+  const S = []; for (let i = 0; i < 4; i++) S.push(E, c[i], c[(i + 1) % 4]);
+  sides.geometry.attributes.position.array.set(S.flatMap(v => v.toArray())); sides.geometry.attributes.position.needsUpdate = true;
+  plane.geometry.attributes.position.array.set(c.flatMap(v => v.toArray())); plane.geometry.attributes.position.needsUpdate = true;
+  for (const g of [lines.geometry, sides.geometry, plane.geometry]) g.computeBoundingSphere();
+  return { E, D };
+}
+
+let follow = false;
+function resize() { const w = box.clientWidth, h = box.clientHeight; renderer.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix(); }
+new ResizeObserver(resize).observe(box); resize();
+
+// ---- playback
+let t = 0, playing = true, last = 0, hold = 0;
+const scrub = document.getElementById('scrub'); scrub.max = N - 1;
+const acts = [...document.querySelectorAll('#act span')];
+function show(i) {
+  t = i; scrub.value = i;
+  document.getElementById('count').textContent = `frame ${i + 1} / ${N}`;
+  drawFrame(view, i);
+  const pl = planAt(i);
+  if (pl) {
+    strip.forEach((c, k) => { drawImagined(c, pl.idx + k); stripLabels[k].textContent = ARROW['FLR'.indexOf(pl.actions[k])] + (k < DATA.exec ? '' : ' ·'); });
+    document.getElementById('planinfo').textContent = DATA.note ? DATA.note.replace('{t}', pl.t + 1).replace('{exec}', DATA.exec) : '';
+  }
+  const a = DATA.actions[i]; acts.forEach((s, k) => s.classList.toggle('cur', a === 'FLR'[k]));
+  const p = poses[i];
+  coneEl.setAttribute('points', pts(cone(p)));
+  svg.querySelector('#coneg').setAttribute('cx', p[0]); svg.querySelector('#coneg').setAttribute('cy', p[1]);
+  pastAll.setAttribute('points', pts(poses.slice(0, i + 1)));
+  pastRecent.setAttribute('points', pts(poses.slice(Math.max(0, i - 40), i + 1)));
+  const ghostPts = pl ? simulate(poses[pl.t], pl.actions) : [poses[i]];
+  ghost.setAttribute('points', pts(ghostPts));
+  agent.setAttribute('transform', `translate(${p[0]} ${p[1]}) rotate(${p[2] * 180 / Math.PI})`);
+  drawFrame(imgCtx, i); imgTex.needsUpdate = true;
+  trail.count = i + 1;
+  // plan dots: shift the instance range by rebuilding from i
+  const q = new THREE.Matrix4(); let n = 0;
+  for (const gp of ghostPts.slice(1)) { q.makeRotationX(-Math.PI / 2).setPosition(gp[0], .025, gp[1]); plan.setMatrixAt(n++, q); }
+  plan.count = n; plan.instanceMatrix.needsUpdate = true;
+  return placeCamera(p);
+}
+let cur = { E: center, D: new THREE.Vector3(1, 0, 0) };
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (playing && sheet.complete && isheet.complete && now - last > 110) {
+    last = now;
+    if (t >= N - 1) { if (++hold > 15) { hold = 0; cur = show(0); } } else cur = show(t + 1);
+  }
+  const k = now / 1000;
+  orb.position.y = EYE + .03 * Math.sin(2 * k); ring.scale.setScalar(1 + .08 * Math.sin(3 * k));
+  if (follow) {
+    const want = cur.E.clone().addScaledVector(cur.D, -3.2).add(new THREE.Vector3(0, 2.4, 0));
+    cam.position.lerp(want, .08); controls.target.lerp(cur.E.clone().addScaledVector(cur.D, 1.2), .08);
+  }
+  controls.update(); renderer.render(scene, cam);
+}
+const playBtn = document.getElementById('play');
+playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? 'Pause' : 'Play'; playBtn.classList.toggle('on', playing); };
+scrub.oninput = () => { cur = show(+scrub.value); };
+const fBtn = document.getElementById('follow');
+fBtn.onclick = () => { follow = !follow; fBtn.classList.toggle('on', follow);
+  if (!follow) { cam.position.copy(HOME); controls.target.copy(center); } };
+document.getElementById('caption').textContent = DATA.caption || '';
+const start = () => { cur = show(+(new URLSearchParams(location.search).get('t') ?? START_T)); requestAnimationFrame(frame); };
+let nl = 0; const ready = () => { if (++nl === 2) start(); };
+[sheet, isheet].forEach(im => im.complete ? ready() : im.addEventListener('load', ready));
+</script>
+</body></html>

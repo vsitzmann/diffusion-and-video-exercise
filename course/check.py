@@ -83,39 +83,39 @@ def drift_target(fn):
 
 def conditional_path(fn):
     def test():
-        z, eps, t = torch.randn(10, 2), torch.randn(10, 2), torch.rand(10, 1)
-        if not _close(fn(z, t, eps), solutions.conditional_path(z, t, eps)):
-            return "x should be alpha_t z + beta_t eps with alpha_t = t and beta_t = 1 - t."
+        x1, eps, t = torch.randn(10, 2), torch.randn(10, 2), torch.rand(10, 1)
+        if not _close(fn(x1, t, eps), solutions.conditional_path(x1, t, eps)):
+            return "x_t should be alpha_t x1 + beta_t eps with alpha_t = t and beta_t = 1 - t."
     return _run("Exercise A · conditional path", test)
 
 
 def conditional_velocity(fn):
     def test():
-        x, z, t = torch.randn(10, 2), torch.randn(10, 2), torch.rand(10, 1) * 0.9
-        if not _close(fn(x, z, t), solutions.conditional_velocity(x, z, t)):
-            return "for alpha_t = t, beta_t = 1 - t the formula simplifies to (z - x) / (1 - t)."
+        x, x1, t = torch.randn(10, 2), torch.randn(10, 2), torch.rand(10, 1) * 0.9
+        if not _close(fn(x, x1, t), solutions.conditional_velocity(x, x1, t)):
+            return "for alpha_t = t, beta_t = 1 - t the formula simplifies to (x1 - x) / (1 - t)."
     return _run("Exercise B · conditional vector field", test)
 
 
 def posterior_weights(fn):
     def test():
-        x, Z = torch.randn(7, 2), torch.randn(30, 2)
-        out = fn(x, 0.6, Z)
-        ref = solutions.posterior_weights(x, 0.6, Z)
+        x, X1 = torch.randn(7, 2), torch.randn(30, 2)
+        out = fn(x, 0.6, X1)
+        ref = solutions.posterior_weights(x, 0.6, X1)
         if out.shape != ref.shape:
             return f"expected shape (number of x, number of training points) = {tuple(ref.shape)}, got {tuple(out.shape)}."
         if not torch.allclose(out.sum(1), torch.ones(7), atol=1e-4):
             return "each row should sum to 1 (it is a distribution over the training points)."
         if not _close(out, ref):
-            return "close, but not equal. Use the log-density -|x - t z_i|^2 / (2 (1-t)^2) inside a softmax."
+            return "close, but not equal. Use the log-density -|x - t x1_i|^2 / (2 (1-t)^2) inside a softmax."
     return _run("Exercise C · posterior over data points", test)
 
 
 def marginal_velocity(fn):
     def test():
-        x, Z = torch.randn(7, 2), torch.randn(30, 2)
-        if not _close(fn(x, 0.4, Z), solutions.marginal_velocity(x, 0.4, Z)):
-            return "average the conditional velocities (z_i - x)/(1-t) with the posterior weights."
+        x, X1 = torch.randn(7, 2), torch.randn(30, 2)
+        if not _close(fn(x, 0.4, X1), solutions.marginal_velocity(x, 0.4, X1)):
+            return "average the conditional velocities (x1_i - x)/(1-t) with the posterior weights."
     return _run("Exercise D · marginal vector field", test)
 
 
@@ -124,15 +124,15 @@ def flow_matching_loss(fn):
         from .nets import FlowNet
         torch.manual_seed(0)
         net = FlowNet(2, width=32, depth=1, pred="v")
-        z = torch.randn(4096, 2)
+        x1 = torch.randn(4096, 2)
         torch.manual_seed(1)
-        out = fn(net, z)
+        out = fn(net, x1)
         torch.manual_seed(1)
-        ref = solutions.flow_matching_loss(net, z)
+        ref = solutions.flow_matching_loss(net, x1)
         if out.ndim != 0:
             return "should return a single number."
         if abs(out.item() - ref.item()) > 0.15 * ref.item():
-            return f"got {out.item():.3f}, expected about {ref.item():.3f}. The target velocity is z - eps."
+            return f"got {out.item():.3f}, expected about {ref.item():.3f}. The target velocity is x1 - eps."
         out.backward()
     return _run("Exercise E · flow-matching loss", test)
 

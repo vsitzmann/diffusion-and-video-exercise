@@ -98,6 +98,22 @@ def _(check, regression_loss, use_solutions):
     return ok_regression, regression_loss_impl
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.vstack([
+        mo.md(r"""
+        **🤔 Predict first.** The next cell trains $G_\theta$ with this loss and shows where 600
+        fixed noise vectors $z$ end up. Will the samples spread over the data, like a generative
+        model should? If not, what will they converge to?
+        """),
+        mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+        They don't spread out. All 600 samples converge to **one point, the mean of the data**,
+        whatever their $z$ was. The box below the animation shows why.
+        """)}),
+    ]), kind="info")
+    return
+
+
 @app.cell
 def _(Generator, ok_regression, mo, plots, regression_loss_impl, torch, toy, toys):
     mo.stop(not ok_regression, mo.md("*Finish Exercise 1 to train the generator.*"))
@@ -234,6 +250,24 @@ def _(check, drift_target, mo, nearest_neighbor, repulsion, use_solutions):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.callout(mo.vstack([
+        mo.md(r"""
+        **🤔 Predict first.** The animation below trains two drifting models. On the left there is
+        no repulsion ($\lambda = 0$): every sample just moves toward its nearest training point.
+        Will those samples cover all of the data?
+        """),
+        mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+        No. They collapse: on the 8 gaussians, all of them end up on one small spot of a single
+        mode, and the rest of the data stays empty. Nothing in the attraction looks at the other
+        samples, so nothing stops them from crowding together. The repulsion on the right is
+        there to fix exactly this. The list below the animation has more.
+        """)}),
+    ]), kind="info")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     lam = mo.ui.slider(0.0, 3.0, step=0.25, value=1.0, label="repulsion strength λ", show_value=True)
     tau_rel = mo.ui.slider(0.02, 0.3, step=0.01, value=0.07, label="kernel width τ (× median distance)", show_value=True)
     mo.hstack([lam, tau_rel], justify="start", gap=2)
@@ -331,6 +365,23 @@ def _(mo):
     For comparison, the color bar also gives the distance of the *mean of the data* from the
     sheet, which is what a completely blurry sample would score.
     """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.vstack([
+        mo.md(r"""
+        **🤔 Predict first.** We now train the same drifting model (with the $\lambda$ and $\tau$
+        from the sliders above) on data hidden in $D$ dimensions (64 by default). Will it still work on the
+        flat (linear) sheet? On the crumpled sheet?
+        """),
+        mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+        **Flat sheet: yes.** It covers all the data, as in 2D. **Crumpled sheet: no.** The samples
+        collapse onto a single spot. So the number of dimensions alone is not the problem; the
+        crumpling is. The distance plot below is a hint, and the explanation follows the results.
+        """)}),
+    ]), kind="info")
     return
 
 

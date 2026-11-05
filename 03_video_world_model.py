@@ -267,6 +267,43 @@ def _(check, renoise, use_solutions):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.vstack([
+        mo.callout(mo.vstack([
+            mo.md(r"""
+            **🤔 Predict first.** All three models feed their own frames back, with clean context
+            ($\tilde k = 1$) where they can. Which of the three training regimes will break first in
+            a long rollout of 200 frames?
+            """),
+            mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+            **Teacher forcing**, the way LLMs are trained. During training it only ever read
+            *perfect* past frames. In the rollout it reads its own frames, which are slightly off,
+            and its errors compound. Diffusion forcing stays stable. Full sequence does not blow up,
+            but it jumps every 8 frames. The plots below show all three.
+            """)}),
+        ]), kind="info"),
+        mo.callout(mo.vstack([
+            mo.md(r"""
+            **🤔 Predict first.** Now we re-noise each generated frame to $\tilde k = 0.9$ before the
+            teacher-forced model reads it. This model never saw a noisy past frame during training.
+            Will the noise make its rollouts better or worse? And what if you lower $\tilde k$ to 0.5?
+            """),
+            mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
+            **Better.** With $\tilde k = 0.9$ almost all broken frames disappear. The noise washes out
+            the fine details in which generated and real frames differ, so the model's own frames
+            look like training inputs again.
+
+            More noise does not help more. In our tests with $\tilde k = 0.5$ the frames hardly
+            break either, but they look less like real frames and change more from one frame to the
+            next than real video does: the noise now also destroys information about the past that
+            the model needs. Try it with the slider below.
+            """)}),
+        ]), kind="info"),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     length = mo.ui.slider(40, 300, step=20, value=200, label="frames to generate", show_value=True)
     k_ctx = mo.ui.slider(0.5, 0.99, step=0.01, value=0.9, label="context level k̃ for 're-noised'", show_value=True)
     mo.hstack([length, k_ctx], justify="start", gap=2)

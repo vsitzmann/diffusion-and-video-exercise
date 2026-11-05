@@ -28,8 +28,8 @@ class Generator(nn.Module):
 class FlowNet(nn.Module):
     """Flow-matching network on R^D, conditioned on the time t in [0, 1].
 
-    pred="x": the network outputs a guess of the clean data point, z_hat = E[z | X_t = x], and the
-              velocity is computed from it: u = (z_hat - x) / (1 - t). This is JiT's choice
+    pred="x": the network outputs a guess of the clean data point, x1_hat = E[x1 | X_t = x], and
+              the velocity is computed from it: u = (x1_hat - x) / (1 - t). This is JiT's choice
               (Li & He, 2025) and works much better when the data lives on a thin sheet in high D.
     pred="v": the network outputs the velocity directly.
     """

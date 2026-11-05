@@ -3,8 +3,9 @@
 Exercises for the course **"Video Generative Models: The LLM Moment for Embodied
 Intelligence?"** (Vincent Sitzmann, MIT, Munich, Nov 6, 2026).
 
-There are three short notebooks, meant for self-study, about 20–25 minutes each. Everything runs
-on a laptop CPU. In each one you implement the key few lines yourself, with the math and a
+There are four short notebooks, meant for self-study, about 20–30 minutes each. Everything runs
+on a laptop CPU; notebook 4 can also use a GPU (e.g. on [molab](https://molab.marimo.io)) for a
+higher-resolution model. In each one you implement the key few lines yourself, with the math and a
 picture of what you are building right next to the code.
 
 | notebook | what you build | what you see |
@@ -12,6 +13,7 @@ picture of what you are building right next to the code.
 | `01_regression_to_drifting.py` | regression onto random data; a primitive drifting model (nearest-neighbor attraction + repulsion) | regression gives the mean; drifting works in 2D and breaks when the data lives on a crumpled sheet in high dimensions |
 | `02_flow_matching.py` | conditional path, conditional and marginal vector fields, the posterior over data points, the flow-matching loss, an Euler sampler | forward and reverse process, conditional vs. marginal flow paths, why flow matching (with x-prediction) still works in high dimensions |
 | `03_video_world_model.py` | the noise levels of full-sequence diffusion, teacher forcing and diffusion forcing; re-noising the past | a tiny action-conditioned video model of a maze world; exposure bias and how a little noise on the past frames fixes it; play inside the model |
+| `04_video_policy.py` | dropping conditions for classifier-free guidance; the guidance formula; an inverse dynamics model; reading actions off an imagined video | one video model as world model, explorer and goal-conditioned policy; how many sampling steps are needed; choosing what to condition on; history and goal guidance; an agent that drives to a goal by imagining the way there |
 
 ## Setup (5 minutes)
 
@@ -48,6 +50,13 @@ is no hidden state and no "run all cells again".
 - Sliders and dropdowns change datasets and hyperparameters. Play with them.
 - Notebook 3 trains three small video models (2–3 minutes each). If you are short on time, choose
   "load the pretrained checkpoints".
+- Notebook 4 loads a pretrained model by default. You can train the 16×16 model yourself (about
+  12 minutes on a laptop CPU). On a GPU, choose the 64×64 resolution at the top.
+
+**Notebook 4 on molab (free GPU).** Open
+<https://molab.marimo.io/github/vsitzmann/diffusion-and-video-exercise/blob/main/04_video_policy.py>.
+If only the notebook is copied over, its first cell clones this repository for the shared code
+and checkpoints.
 
 ## What is in here
 
@@ -55,9 +64,10 @@ is no hidden state and no "run all cells again".
 01_…, 02_…, 03_….py   the notebooks
 course/               shared code: toy datasets and embeddings, networks, plots, the video
                       model, the exercise checks, and the reference solutions
-mazeworld/            the maze world: maze generation, explorer policy, NumPy raycaster
+mazeworld/            the maze world: maze generation, explorer policy, NumPy raycaster;
+                      world4.py: notebook 4's textured world, the shortest-path expert, datasets
 rust/                 the same raycaster in Rust (optional, ~100x faster)
-checkpoints/          pretrained video models for notebook 3
+checkpoints/          pretrained video models for notebooks 3 and 4
 ```
 
 **Optional: the Rust renderer.** The maze world renders with NumPy out of the box, which is fast
@@ -70,12 +80,18 @@ uv pip install ./rust     # or: pip install ./rust
 
 ## References
 
-- Lecture notation for flow matching: Holderrieth & Erives, *An Introduction to Flow Matching
-  and Diffusion Models* (MIT 6.S184).
+- Flow matching: Holderrieth & Erives, *An Introduction to Flow Matching and Diffusion Models*
+  (MIT 6.S184). The notebooks use the notation of Lipman et al., *Flow Matching for Generative
+  Modeling* (2023): data $x_1$ at $t = 1$, noise $x_0 = \epsilon$ at $t = 0$.
 - Drifting models: Deng et al., *Generative Modeling via Drifting* (2026).
 - x-prediction in high dimensions: Li & He, *Back to Basics: Let Denoising Generative Models
   Denoise* (JiT, 2025).
 - Diffusion forcing: Chen et al., *Diffusion Forcing: Next-token Prediction Meets Full-Sequence
   Diffusion* (2024).
 - Noise augmentation for game world models: Valevski et al., *Diffusion Models Are Real-Time
-  Game Engines* (GameNGen, 2024).
+  Game Engines* (GameNGen, 2024); Alonso et al., *Diffusion for World Modeling: Visual Details
+  Matter in Atari* (DIAMOND, 2024).
+- Classifier-free guidance: Ho & Salimans, *Classifier-Free Diffusion Guidance* (2022).
+- History guidance: Song et al., *History-Guided Video Diffusion* (2025).
+- Video policies with inverse dynamics: Du et al., *Learning Universal Policies via Text-Guided
+  Video Generation* (UniPi, 2023).
