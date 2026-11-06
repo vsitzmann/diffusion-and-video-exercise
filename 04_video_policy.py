@@ -290,6 +290,38 @@ def _(RES, mo, w4):
 
 
 @app.cell(hide_code=True)
+def _(DEV, P, RES, mo, plots, plt, torch, val, video_model):
+    # Dreams: the same 4 history frames and the same actions, 4 different noise samples.
+    _T = 48 if RES == 16 or DEV.type == "cuda" else 16
+    _ep, _S = 35, 4  # an expert episode in a held-out maze
+    _real = P.to_float(val["frames"][_ep:_ep + 1, :P.C + _T]).to(DEV)
+    _acts = torch.from_numpy(val["actions"][_ep:_ep + 1, :P.C + _T]).to(DEV)
+    with mo.status.spinner(title="dreaming..."):
+        _dreams = P.generate(video_model, _real[:, :P.C].expand(_S, -1, -1, -1, -1), _T,
+                             actions=_acts.expand(_S, -1), n_steps=10, seed=0)
+    _labels = ["real"] + [f"dream {_i + 1}" for _i in range(_S)]
+    _vids = [P.to_u8(_real[0, P.C:])] + [P.to_u8(_dreams[_i]) for _i in range(_S)]
+    _strip = plots.video_grid(_vids, _labels, every=4, scale=0.75 if RES == 16 else 0.9)
+    plt.close(_strip)
+    mo.vstack([
+        mo.md(r"""
+        ### What the model dreams
+
+        The model gets the first 4 frames of a held-out episode and the actions that were really
+        taken, and generates the next frames one at a time, feeding its own frames back as
+        history. We do this 4 times with different noise. For the first frames all 4 dreams agree
+        with the real video: what is in view, and the actions, fix them. Then the agent walks into
+        parts of the maze that none of the 4 frames showed, and every dream imagines its own
+        walls. Each of these mazes is a plausible sample, not an error: the model has learned a
+        *distribution* over what could come next.
+        """),
+        _strip,
+        plots.video_html(_vids, _labels, size=1.8, interval=150),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
     ## Part 4 · The inverse dynamics model
@@ -387,8 +419,9 @@ def _(mo):
     the **average** over every future the model considers possible. Where the future is
     uncertain, that average is a blur, exactly like the regression in notebook 1.
 
-    Here, though, the future is nearly certain: the history and the actions fix almost
-    everything, except the parts of the maze that come into view for the first time. So one step
+    Here, though, the near future is nearly certain: the history and the actions fix almost
+    everything, except the parts of the maze that come into view for the first time (that is where
+    the dreams in Part 3 went their own ways). So one step
     is nearly as good as ten, and it even scores *better* on PSNR (a squared error rewards the
     average). It looks a little flatter in the newly revealed parts, which is easiest to see at
     64×64. With fewer things fixed, as in the policy below (no actions, only a goal), there is
