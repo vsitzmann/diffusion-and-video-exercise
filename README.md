@@ -1,7 +1,7 @@
 # From regression to world models: hands-on exercises
 
-Exercises for the course **"Video Generative Models: The LLM Moment for Embodied
-Intelligence?"** (Vincent Sitzmann, MIT, Munich, Nov 6, 2026).
+Exercises for the course **"Video Generative Models: The LLM Moment for Embodied Intelligence?"**
+(Vincent Sitzmann, MIT, Munich, Nov 6, 2026).
 
 There are four short notebooks, meant for self-study, about 20–30 minutes each. Everything runs
 on a laptop CPU; notebook 4 can also use a GPU (e.g. on [molab](https://molab.marimo.io)) for a

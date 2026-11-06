@@ -512,7 +512,7 @@ def _(DEV, P, plots, plt, torch, val, video_model):
 
 @app.cell(hide_code=True)
 def _(mo):
-    k_sliders = mo.ui.array([mo.ui.slider(0.0, 1.0, step=0.1, value=0.0, label=f"frame t−{4 - j}", show_value=True)
+    k_sliders = mo.ui.array([mo.ui.slider(0.0, 1.0, step=0.1, value=1.0, label=f"frame t−{4 - j}", show_value=True)
                              for j in range(4)], label="noise level of each history frame (0 = clean, 1 = pure noise)")
     mo.vstack([
         mo.md(r"""
@@ -521,7 +521,9 @@ def _(mo):
         Because every history frame was trained at its own noise level, we can decide at test
         time **how much the model should trust each past frame**, frame by frame. Level 0 shows
         a frame as it is, level 1 hides it completely, anything in between keeps the coarse
-        layout and hides the details.
+        layout and hides the details. The sliders start with the whole history hidden. Below
+        them are 4 samples of the next 6 frames: watch how different they are, then make the
+        history frames clean one by one and watch the samples agree.
 
         **🤔 Predict first.** (a) If all four history frames are at level 1, what will the
         model imagine? (b) If only the most recent frame $t-1$ is at 1 and the older three are
@@ -583,8 +585,11 @@ def _(DEV, P, RES, k_sliders, mo, np, plt, torch, val, video_model):
             for _s in _axes[_r, 0].spines.values():
                 _s.set_visible(False)
     _fig.subplots_adjust(wspace=0.05, hspace=0.08, left=0.16)
-    mo.vstack([_fig, mo.md(f"Over 32 held-out episodes with these history levels, the first generated frame has a PSNR of **{_p:.1f} dB** "
-                           "against the real one (all clean: 31 dB; all hidden: 14 dB, for the pretrained 16×16 model).")])
+    _spread = _gen.std(0).mean().item()  # how much the 4 samples differ, per pixel
+    mo.vstack([_fig, mo.md(f"The 4 samples differ by **{_spread:.2f}** per pixel on average (about 0.25 with the whole "
+                           "history hidden, about 0.02 with a clean one, for the pretrained 16×16 model). "
+                           f"Over 32 held-out episodes with these history levels, the first generated frame has a PSNR of **{_p:.1f} dB** "
+                           "against the real one (all clean: 31 dB; all hidden: 14 dB).")])
     return
 
 

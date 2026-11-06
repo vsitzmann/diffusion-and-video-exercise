@@ -3,10 +3,9 @@
 For whoever develops the course (people or agents). `AGENTS.md` is the brief for *students'* AI
 assistants (tutor mode) and must not point here.
 
-The hands-on part of Vincent's course "Video Generative Models: The LLM Moment
-for Embodied Intelligence?" (Munich, Nov 6, 2026). The course context (who, when, the agreed
-abstract, the mail threads) is in the deck's brief:
-the AGENTS.md of the course's deck in `~/Decks/Vincents talks/`.
+The hands-on part of Vincent's course "Video Generative Models: The LLM Moment for Embodied
+Intelligence?" (Munich, Nov 6, 2026). The course context (who, when, the agreed abstract, the mail
+threads) is in the AGENTS.md of the course's deck in `~/Decks/Vincents talks/`.
 GitHub: `vsitzmann/diffusion-and-video-exercise` (private).
 
 **Audience.** Economists, statisticians, data scientists. They are quantitative,
