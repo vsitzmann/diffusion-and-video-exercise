@@ -1,17 +1,12 @@
 """A tiny maze world: random block mazes, an explorer policy, and episode generation.
 
-Maze generation, dynamics and the policy are cheap and live here in NumPy. Rendering is the
-expensive part; it uses the Rust raycaster (`mazeworld_rs`) when it is installed, otherwise
-`render_numpy.render`, which draws the same pictures.
+Maze generation, dynamics and the policy are cheap and live here in NumPy. The pictures come
+from `museum.render`: the mazes drawn as a small museum (brick walls with paintings, ceiling
+lamps). `render_numpy` and the Rust crate hold the older flat-colored raycaster.
 """
 import numpy as np
 
-from . import render_numpy
-
-try:  # optional fast path: pip install ./rust  (needs a Rust toolchain)
-    import mazeworld_rs as _rs
-except ImportError:  # pragma: no cover
-    _rs = None
+from . import museum
 
 FORWARD, LEFT, RIGHT = 0, 1, 2
 ACTIONS = ["forward", "turn left", "turn right"]
@@ -19,7 +14,8 @@ STEP = 0.15  # cells per forward step
 TURN = np.pi / 16  # radians per turn step
 RADIUS = 0.2  # the agent keeps this distance from walls
 
-# Index 0 is free space. Bright, distinct colors so that 16x16 frames stay readable.
+# Index 0 is free space. The museum renderer uses the block index only to seed which paintings
+# hang where; the colors are those of the old flat-colored renderer (render_numpy, Rust).
 PALETTE = np.array([
     [0.00, 0.00, 0.00],
     [0.90, 0.20, 0.15],  # red
@@ -31,17 +27,15 @@ PALETTE = np.array([
 
 
 def backend():
-    return "rust" if _rs is not None else "numpy"
+    return "numpy"
 
 
-def render(grid, poses, size=16, ss=4, palette=PALETTE):
+SUPERSAMPLE = {16: 3, 32: 2}
+
+
+def render(grid, poses, size=16, ss=None):
     """Render first-person views. grid (Gy, Gx) uint8, poses (N, 3) -> (N, size, size, 3) uint8."""
-    grid = np.ascontiguousarray(grid, dtype=np.uint8)
-    poses = np.ascontiguousarray(np.asarray(poses, dtype=np.float64).reshape(-1, 3))
-    palette = np.ascontiguousarray(palette, dtype=np.float64)
-    if _rs is not None:
-        return _rs.render(grid, palette, poses, size, ss)
-    return render_numpy.render(grid, palette, poses, size, ss)
+    return museum.render(grid, poses, size, ss or SUPERSAMPLE.get(size))
 
 
 def make_maze(rng, n=4, loops=0.2, n_colors=len(PALETTE) - 1):
@@ -143,11 +137,10 @@ def dataset(n, length=32, size=16, seed=0, maze_n=4):
                 grids=np.stack([e["grid"] for e in eps]))
 
 
-def topdown(grid, poses=None, cell=8, palette=PALETTE):
+def topdown(grid, poses=None, cell=8):
     """Bird's-eye picture of the maze (uint8 RGB), with the trajectory drawn in white and the
     last pose marked."""
-    img = (palette[grid] * 255).astype(np.uint8)
-    img[grid == 0] = 40
+    img = np.where((grid > 0)[..., None], np.array([214, 208, 196], np.uint8), np.uint8(40))
     img = img.repeat(cell, 0).repeat(cell, 1)
     if poses is not None:
         for x, y, _ in poses:

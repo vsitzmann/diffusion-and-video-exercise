@@ -67,18 +67,10 @@ and checkpoints.
 01_…, 02_…, 03_….py   the notebooks
 course/               shared code: toy datasets and embeddings, networks, plots, the video
                       model, the exercise checks, and the reference solutions
-mazeworld/            the maze world: maze generation, explorer policy, NumPy raycaster;
+mazeworld/            the maze world: maze generation, explorer policy, dynamics;
+                      museum.py: notebook 3's renderer (NumPy raycaster: brick walls, paintings, lamps)
                       world4.py: notebook 4's textured world, the shortest-path expert, datasets
-rust/                 the same raycaster in Rust (optional, ~100x faster)
 checkpoints/          pretrained video models for notebooks 3 and 4
-```
-
-**Optional: the Rust renderer.** The maze world renders with NumPy out of the box, which is fast
-enough for the exercises. If you have a [Rust toolchain](https://rustup.rs), you can install the
-compiled renderer. It draws exactly the same frames, at about 250,000 frames per second on 4 cores:
-
-```bash
-uv pip install ./rust     # or: pip install ./rust
 ```
 
 ## References

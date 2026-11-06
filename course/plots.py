@@ -228,3 +228,52 @@ def model_diagram():
             "frame also goes straight to the denoiser.", fontsize=9)
     fig.tight_layout()
     return fig
+
+
+def rollout_curves(dists, real, thr, title=""):
+    """Part 5 of notebook 3. dists: {name: (B, T) distances to the nearest real frame}, real: the
+    same for the real test videos. Left: mean distance per frame; right: fraction of broken
+    frames (distance > thr), smoothed."""
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.2))
+    for name, d in dists.items():
+        d = np.asarray(d)
+        axes[0].plot(np.minimum(d, 1.0).mean(0), label=name, lw=1.2)
+        axes[1].plot(np.convolve((d > thr).mean(0), np.ones(15) / 15, mode="valid"), label=name, lw=1.2)
+    axes[0].plot(np.asarray(real).mean(0), "k--", lw=1, label="real video")
+    axes[0].set_title("distance to the nearest real frame (lower = more realistic)", fontsize=9)
+    axes[1].set_title(f"fraction of broken frames (distance > {thr}), smoothed", fontsize=9)
+    for ax in axes:
+        ax.set_xlabel("frame")
+    axes[1].legend(fontsize=7)
+    if title:
+        fig.suptitle(title, fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def denoising(rows, real=None, scale=0.85):
+    """How one frame is generated, step by step. rows: list of (label, trajectory, final), where
+    trajectory is a list of (k, x_k, x_hat) with uint8 images (H, W, 3), as recorded by
+    sample_frame(..., trajectory=[...]) (convert with to_uint8 first), and final the frame at
+    k = 0. For every model two rows: the noisy state x_k, and the model's guess of the clean frame.
+    real: optional list of uint8 real next frames (or None), one per row pair, in the last column."""
+    n_cols = max(len(t) for _, t, _ in rows) + 1 + (real is not None)
+    fig, axes = plt.subplots(2 * len(rows), n_cols, figsize=(scale * n_cols, scale * 2.2 * len(rows)),
+                             squeeze=False)
+    for ax in axes.flat:
+        ax.axis("off")
+    for r, (label, traj, final) in enumerate(rows):
+        a, b = axes[2 * r], axes[2 * r + 1]
+        for j, (k, x, xh) in enumerate(traj):
+            a[j].imshow(x, interpolation="nearest")
+            b[j].imshow(xh, interpolation="nearest")
+            a[j].set_title(f"k = {k:.1f}", fontsize=8)
+        a[len(traj)].imshow(final, interpolation="nearest")
+        a[len(traj)].set_title("k = 0: result", fontsize=8)
+        if real is not None and real[r] is not None:
+            a[-1].imshow(real[r], interpolation="nearest")
+            a[-1].set_title("real frame", fontsize=8)
+        a[0].text(-0.12, 0.5, f"{label}\nnoisy $x^k$", transform=a[0].transAxes, ha="right", va="center", fontsize=8)
+        b[0].text(-0.12, 0.5, "guess $\\hat x$", transform=b[0].transAxes, ha="right", va="center", fontsize=8)
+    fig.tight_layout()
+    return fig

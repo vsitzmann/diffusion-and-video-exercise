@@ -55,13 +55,12 @@ def _(mo):
     mo.md(r"""
     ## Part 1 · The world
 
-    A random maze of colored blocks, seen through a 16×16 pixel camera, rendered by a tiny
-    raycaster (the technique behind Wolfenstein 3D). An explorer walks through it with three
-    actions: **forward**, **turn left**, **turn right**. Every episode is a new random maze, so
-    the model can't memorize a map: when it turns a corner, it has to *imagine* what comes next.
-
-    The renderer exists twice: in Rust (fast, optional, `pip install ./rust`) and in NumPy (the
-    fallback). Both draw exactly the same pictures.
+    A random maze built as a small museum: brick walls with paintings, lamps on the ceiling. A
+    tiny raycaster (the technique behind Wolfenstein 3D) draws what a camera sees, and the model
+    you train sees it at 16×16 pixels. An explorer walks through the maze with three actions:
+    **forward**, **turn left**, **turn right**. Every episode is a new random maze with its own
+    paintings, so the model can't memorize a map: when it turns a corner, it has to *imagine* what
+    comes next.
     """)
     return
 
@@ -69,15 +68,17 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo, mw, np, plots, time):
     _ep = mw.episode(seed=7, length=48, size=16)
+    _ep32 = mw.episode(seed=7, length=48, size=32)  # what the pretrained big model sees
     _big = mw.episode(seed=7, length=48, size=64)  # the same episode at 64x64, for reference
     _maps = [mw.topdown(_ep["grid"], _ep["poses"][: t + 1]) for t in range(48)]
     _t = time.time()
-    _d = mw.dataset(200, 32, 16, seed=1)
-    _fps = 200 * 32 / (time.time() - _t)
+    _d = mw.dataset(100, 32, 16, seed=1)
+    _fps = 100 * 32 / (time.time() - _t)
     mo.vstack([
-        mo.md(f"Renderer backend: **{mw.backend()}**. Generating episodes runs at about "
-              f"**{_fps:,.0f} frames/s** here (including the maze generation and the explorer's choices)."),
-        plots.video_html([_ep["frames"], _big["frames"]], ["what the model sees (16×16)", "the same at 64×64"],
+        mo.md(f"Generating episodes runs at about **{_fps:,.0f} frames/s** here (including the maze "
+              "generation and the explorer's choices)."),
+        plots.video_html([_ep["frames"], _ep32["frames"], _big["frames"]],
+                         ["your model sees 16×16", "the big pretrained model: 32×32", "the same at 64×64"],
                          extra=_maps, size=2.0, interval=150),
     ])
     return
@@ -205,7 +206,8 @@ def _(ROOT, V, mo, mw, noise_levels_impl, ok_levels, os, source, steps, torch, t
             _m.load_state_dict(torch.load(_mine))
         else:
             if _data is None:
-                _data = mw.dataset(2000, 32, 16, seed=0)
+                with mo.status.spinner(title="rendering 2,000 training episodes (about a minute)..."):
+                    _data = mw.dataset(2000, 32, 16, seed=0)
             with mo.status.progress_bar(total=steps.value, title=f"training: {_r}") as _bar:
                 _done = [0]
 
@@ -221,6 +223,51 @@ def _(ROOT, V, mo, mw, noise_levels_impl, ok_levels, os, source, steps, torch, t
         models[_r] = _m
     mo.md("Models ready: " + ", ".join(f"**{r}**" for r in REGIMES) + ".")
     return REGIMES, models
+
+
+@app.cell(hide_code=True)
+def _(ROOT, V, torch):
+    # the big pretrained diffusion-forcing model (32x32): same code, wider, trained on a GPU
+    big_df = V.VideoDenoiser(**V.BIG)
+    big_df.load_state_dict(torch.load(ROOT / "checkpoints" / "nb3_big_diffusion_forcing.pt"))
+    _ = big_df.eval()  # (assigned, so that marimo does not print the network)
+    return (big_df,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### How one frame is generated
+
+    Every frame is sampled as in notebook 2: start from pure noise at level $k = 1$ and take Euler
+    steps down to $k = 0$. Here are the 10 steps for one frame, from the big pretrained
+    diffusion-forcing model (32×32, more about it in Part 5). In each pair of rows, the top row is
+    the noisy frame $x^k$, and the bottom row is the model's guess of the clean frame $\hat x$ at
+    that step, which sets the direction of the step.
+
+    - **No history:** the very first frame of a video. At $k = 1$ the model knows nothing, so its
+      guess is the average of all views it has seen: a gray blur. Each step removes some noise,
+      the guess commits to a corridor, and the details appear.
+    - **After 4 frames:** the frame after 4 real frames and their actions. The past already fixes
+      almost everything, so the guess is the right frame from the first step on, and denoising
+      only fills in the fine details.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(V, big_df, mw, plots, plt, torch):
+    _ep = mw.episode(99 * 1_000_003 + 1, 8, 32)  # test episode 1, rendered at 32x32
+    _ctx = V.to_tensor(_ep["frames"])[None]
+    _acts = torch.as_tensor(_ep["actions"])[None]
+    _rows = []
+    for _lab, _C in [("no history", 0), ("after 4 frames", 4)]:
+        _traj, _x = V.denoise_next_frame(big_df, _ctx[:, :_C], _acts, seed=3)
+        _rows.append((_lab, [(_k, V.to_uint8(_a[0]), V.to_uint8(_b[0])) for _k, _a, _b in _traj], V.to_uint8(_x[0])))
+    _fig = plots.denoising(_rows, real=[None, _ep["frames"][4]])
+    plt.close(_fig)
+    _fig
+    return
 
 
 @app.cell(hide_code=True)
@@ -318,7 +365,8 @@ def _(V, mw, torch):
     test_ctx = V.to_tensor(test_set["frames"][:, :8])
     test_actions = torch.as_tensor(test_set["actions"]).long()
     bank = V.frame_bank()
-    return bank, test_actions, test_ctx, test_set
+    BROKEN = 0.2  # a frame counts as broken above this distance to the nearest real frame
+    return BROKEN, bank, test_actions, test_ctx, test_set
 
 
 @app.cell(hide_code=True)
@@ -339,21 +387,11 @@ def _(V, k_ctx, length, mo, models, ok_renoise, renoise_impl, test_actions, test
 
 
 @app.cell(hide_code=True)
-def _(V, bank, mo, np, plots, plt, rollouts, test_set):
+def _(BROKEN, V, bank, mo, plots, rollouts, test_set):
     _real = V.realism(V.to_tensor(test_set["frames"][:, : next(iter(rollouts.values())).shape[1]]), bank)
-    _thr = 0.3
-    _fig, _axes = plt.subplots(1, 2, figsize=(10, 3.2))
-    for _name, _o in rollouts.items():
-        _r = V.realism(_o, bank)
-        _axes[0].plot(_r.clamp(max=1.0).mean(0).numpy(), label=_name, lw=1.2)
-        _axes[1].plot(np.convolve((_r > _thr).float().mean(0).numpy(), np.ones(15) / 15, mode="valid"), label=_name, lw=1.2)
-    _axes[0].plot(_real.mean(0).numpy(), "k--", lw=1, label="real video")
-    _axes[0].set_title("distance to the nearest real frame (lower = more realistic)")
-    _axes[1].set_title(f"fraction of broken frames (distance > {_thr}), smoothed")
-    for _ax in _axes:
-        _ax.set_xlabel("frame")
-    _axes[1].legend(fontsize=7)
-    _fig.tight_layout()
+    _thr = BROKEN
+    _fig = plots.rollout_curves({_k: V.realism(_o, bank).numpy() for _k, _o in rollouts.items()},
+                                _real.numpy(), _thr, "your models (16×16)")
     _show = ["full sequence", "teacher forcing · clean", [k for k in rollouts if k.startswith("diffusion forcing · re")][0]]
     # show the episode where teacher forcing breaks the most
     _ep = int((V.realism(rollouts["teacher forcing · clean"], bank) > _thr).sum(1).argmax())
@@ -373,31 +411,70 @@ def _(V, bank, mo, np, plots, plt, rollouts, test_set):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### The same experiment with a bigger model
+
+    Your models are tiny: about 0.3 million parameters, trained for a few minutes on a CPU, and
+    they see 16×16 pixels. We trained the same architecture, wider (about 2.9 million
+    parameters), at 32×32, on a GPU for 20,000 steps, with exactly the code you just ran:
+    `V.train_video` with the three noise-level regimes of Exercise 1. Rolling it out on a laptop
+    CPU would take a while, so here are its results on 32 test episodes (the 24 above and 8 more),
+    computed in advance. The checkpoints are in `checkpoints/nb3_big_*.pt`, and the bonus at the end lets you
+    play with one of them.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(BROKEN, ROOT, mo, np, plots):
+    _r = np.load(ROOT / "checkpoints" / "nb3_big_results.npz")
+    _names = [str(n) for n in _r["names"]]
+    _fig = plots.rollout_curves({n: _r[f"dist_{i}"] for i, n in enumerate(_names)}, _r["real_dist"],
+                                BROKEN, "the big model (32×32), computed in advance")
+    _show = [0, 1, 2, 4]  # full sequence, teacher forcing (clean, re-noised), diffusion forcing (re-noised)
+    _j = 1  # of the saved episodes (the three where teacher forcing breaks most), the clearest one
+    _vids = [_r[f"video_{i}"][_j] for i in _show]
+    _ep = int(_r["keep"][_j])
+    mo.vstack([
+        _fig,
+        mo.md(f"**Episode {_ep}**, as a film strip (every 8th frame) and as a video. Watch the "
+              "teacher-forced model with re-noised context: the curves above miss what goes wrong there."),
+        plots.video_grid([_r["real_frames"][_j]] + _vids, ["real"] + [_names[i] for i in _show], every=8),
+        plots.video_html(_vids, [_names[i] for i in _show], size=2.2, interval=80),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     **What to look for.**
 
-    - **Teacher forcing with clean context falls apart.** The fraction of broken frames keeps
-      growing, colors drift and saturate, and the motion slowly freezes. This is **exposure
-      bias**. The camera moves slowly, so every frame is mostly a copy of the previous one, and
+    - **Teacher forcing with clean context falls apart**, the small model and the big one. The
+      fraction of broken frames keeps growing, the picture smears, and the motion slows down.
+      This is **exposure bias**. The camera moves slowly, so every frame is mostly a copy of the previous one, and
       the teacher-forced model learned to copy fine details from a *perfect* past frame. At test
       time it sees its *own* frames, which are slightly off. It copies the errors, adds new ones,
       and the errors compound.
     - **Diffusion forcing is stable.** It was trained with past frames at every noise level, so it
       learned that the past is unreliable in its details, and it leans on what it knows about the
       world instead.
-    - **A tiny bit of noise on the past frames rescues even the teacher-forced model.** The noise
-      washes out exactly the fine details where generated and real frames differ, so the model's
-      own frames look like training inputs again. Try the $\tilde k$ slider. This trick ("noise
-      augmentation") is what made game world models like GameNGen work.
+    - **A tiny bit of noise on the past frames rescues your small teacher-forced model.** The
+      noise washes out exactly the fine details where generated and real frames differ, so the
+      model's own frames look like training inputs again. Try the $\tilde k$ slider. **The big
+      model is different:** it never saw a noisy past frame either, and it is sharp enough to
+      copy the noise itself into the next frame, as blue blotches. (Our distance measure compares
+      8×8 thumbnails and misses them; the video shows them.) Noise on the past has to be part of
+      *training*, and that is diffusion forcing. Game world models like GameNGen add exactly this
+      kind of noise to the past frames during training ("noise augmentation").
     - **Full sequence** doesn't blow up, but look at the jumps every 8 frames. Re-noising the
       past to the current level destroys most of the information in it, so each new chunk is only
       loosely tied to what came before.
 
     How strongly teacher forcing breaks varies from one training run to the next. In our tests
-    (3 training runs, 32 episodes, 200 frames), teacher forcing with clean context had 23–32% broken
-    frames in the last quarter of the video, 2–4% with re-noised context, and diffusion forcing
-    0%. How much the errors matter also depends on how good the model is. In this tiny world a
-    model trained for much longer becomes good enough that its frames rarely leave the training
-    distribution. Real video models are never that good.
+    (32 test episodes, 200 frames each), teacher forcing with clean context had 12% broken frames
+    in the last quarter of the video (small model) and 11% (big model), and broke in a fifth to a
+    quarter of the episodes; diffusion forcing had 1–3%. Diffusion forcing is not perfect either:
+    now and then it gets stuck in front of a wall or a painting.
 
     These are exactly the problems that methods like diffusion forcing and self forcing address in
     today's large video world models.
@@ -410,7 +487,7 @@ def _(mo):
     mo.md(r"""
     ## Bonus · Play inside your world model
 
-    The diffusion-forcing model, driven by *you*. Every click generates the next frame from the
+    A diffusion-forcing model, driven by *you*. Every click generates the next frame from the
     model's memory. There is no game engine underneath: the maze only exists in the model's
     imagination.
     """)
@@ -418,9 +495,22 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(V, k_ctx, mo, models, ok_renoise, renoise_impl, test_actions, test_ctx, torch):
+def _(mo):
+    play_model = mo.ui.radio(["the big pretrained model (32×32)", "your diffusion-forcing model (16×16)"],
+                             value="the big pretrained model (32×32)", label="play with")
+    play_model
+    return (play_model,)
+
+
+@app.cell(hide_code=True)
+def _(V, big_df, k_ctx, mo, models, mw, ok_renoise, play_model, renoise_impl, test_actions, test_ctx, torch):
     mo.stop(not ok_renoise)
-    _model = models["diffusion forcing"]
+    if play_model.value.startswith("the big"):
+        _model = big_df
+        # test episode 1 again, rendered at 32x32 (mw.dataset gives episode i the seed 99 * 1_000_003 + i)
+        _ctx = V.to_tensor(mw.episode(99 * 1_000_003 + 1, 8, 32)["frames"])[None]
+    else:
+        _model, _ctx = models["diffusion forcing"], test_ctx[1:2]
     _g = torch.Generator().manual_seed(0)
 
     def start():
@@ -428,10 +518,10 @@ def _(V, k_ctx, mo, models, ok_renoise, renoise_impl, test_actions, test_ctx, to
         h = _model.h0.expand(1, -1, -1, -1)
         k = torch.full((1,), k_ctx.value)
         for t in range(3):
-            p = renoise_impl(test_ctx[1:2, t], k_ctx.value, _g)
+            p = renoise_impl(_ctx[:, t], k_ctx.value, _g)
             h = _model.step(h, _model.encode(p, k), test_actions[1:2, t])
-        x = test_ctx[1:2, 3]
-        return {"h": h, "prev": renoise_impl(x, k_ctx.value, _g), "frames": [test_ctx[1:2, t] for t in range(4)]}
+        x = _ctx[:, 3]
+        return {"h": h, "prev": renoise_impl(x, k_ctx.value, _g), "frames": [_ctx[:, t] for t in range(4)]}
 
     @torch.no_grad()
     def act(state, action):

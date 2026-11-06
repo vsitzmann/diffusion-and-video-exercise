@@ -475,6 +475,43 @@ def _(AUTORUN, DEV, P, RES, idm, mo, np, plots, plt, torch, val, video_model, wm
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.md(r"""
+    **The 10 Euler steps of one frame.** In each pair of rows, the top row is the noisy frame $x^k$
+    and the bottom row is the model's guess of the clean frame $\hat x$ at that step. The guess in
+    the first column, at $k = 1$, is exactly what one-step sampling returns.
+
+    - **No history** (the history dropped, as in Exercise 1): the first guess is the average of
+      every view the model has seen, a blur. Step by step it commits to one view, and the details
+      appear.
+    - **After 4 frames and their actions:** the past fixes almost everything, so the guess is the
+      right frame from the first step on. That is why one step is nearly as good as ten here.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(DEV, P, plots, plt, torch, val, video_model):
+    _ep = 24  # the first expert episode of the held-out mazes
+    _g = torch.Generator(device=DEV).manual_seed(3)
+    _ctx = P.to_float(val["frames"][_ep:_ep + 1, :P.C]).to(DEV)
+    _acts = torch.from_numpy(val["actions"][_ep:_ep + 1, :P.C]).long().to(DEV)
+    _ones = torch.ones(1, P.C, device=DEV)
+    _cases = [("no history", P.renoise(_ctx, _ones, _g), _ones, torch.full_like(_acts, P.NULL_ACT)),
+              ("after 4 frames", _ctx, torch.zeros_like(_ones), _acts)]
+    _rows = []
+    with torch.no_grad():
+        for _lab, _c, _kc, _a in _cases:
+            _traj = []
+            _x = P.sample_frame(video_model, _c, _kc, _a, n_steps=10, g=_g, trajectory=_traj)
+            _rows.append((_lab, [(_k, P.to_u8(_xk[0]), P.to_u8(_xh[0])) for _k, _xk, _xh in _traj], P.to_u8(_x[0])))
+    _fig = plots.denoising(_rows, real=[None, val["frames"][_ep, P.C]])
+    plt.close(_fig)
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     k_sliders = mo.ui.array([mo.ui.slider(0.0, 1.0, step=0.1, value=0.0, label=f"frame t−{4 - j}", show_value=True)
                              for j in range(4)], label="noise level of each history frame (0 = clean, 1 = pure noise)")
     mo.vstack([

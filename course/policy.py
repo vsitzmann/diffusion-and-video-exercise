@@ -327,9 +327,11 @@ def predict(model, x, k, ctx, k_ctx, acts, map_in, offset, variants=(), guide=No
 
 
 @torch.no_grad()
-def sample_frame(model, ctx, k_ctx, acts, map_in=None, offset=None, n_steps=10, g=None, variants=(), guide=None):
+def sample_frame(model, ctx, k_ctx, acts, map_in=None, offset=None, n_steps=10, g=None, variants=(), guide=None,
+                 trajectory=None):
     """Euler sampling of one frame from pure noise (k = 1) down to clean (k = 0), with
-    x-prediction: the velocity is dx/dk = (x - x_hat) / k."""
+    x-prediction: the velocity is dx/dk = (x - x_hat) / k. If `trajectory` is a list, every step
+    appends (k, x at level k, the model's clean-frame guess x_hat) to it."""
     B, _, ch, H, W = ctx.shape
     dev = ctx.device
     if offset is None:
@@ -338,6 +340,8 @@ def sample_frame(model, ctx, k_ctx, acts, map_in=None, offset=None, n_steps=10, 
     ks = torch.linspace(1, 0, n_steps + 1, device=dev)
     for j in range(n_steps):  # ks[j] > 0 here, only the last step lands on k = 0
         xh = predict(model, x, ks[j].expand(B), ctx, k_ctx, acts, map_in, offset, variants, guide)
+        if trajectory is not None:
+            trajectory.append((float(ks[j]), x.clone(), xh.clone()))
         x = x + (ks[j + 1] - ks[j]) * (x - xh) / ks[j]
     return x
 

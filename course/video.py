@@ -79,19 +79,25 @@ class ConvGRU(nn.Module):
         return (1 - u) * h + u * c
 
 
+# The pretrained model of notebook 3: the same architecture and training code, wider, at 32x32.
+BIG = dict(ch=48, hid=96, emb=128, res=32)
+
+
 class VideoDenoiser(nn.Module):
-    def __init__(self, ch=16, hid=32, emb=64):
+    """Frames are res x res; the RNN state and the U-Net's middle level are res/2 x res/2."""
+
+    def __init__(self, ch=16, hid=32, emb=64, res=16):
         super().__init__()
-        self.hid = hid
+        self.hid, self.res = hid, res
         self.level = LevelEmbed(emb)
-        # context encoder: 16x16 frame -> 8x8 features
+        # context encoder: res x res frame -> res/2 x res/2 features
         self.enc_in = nn.Conv2d(3, ch, 3, padding=1)
         self.enc_res = ResBlock(ch, emb)
         self.enc_down = nn.Conv2d(ch, hid, 3, stride=2, padding=1)
         self.action = nn.Embedding(N_ACTIONS, hid)
         self.gru = ConvGRU(hid, hid)
-        self.h0 = nn.Parameter(torch.zeros(1, hid, 8, 8))
-        # denoiser U-Net: 16x16 -> 8x8 (+ h) -> 4x4 -> back up
+        self.h0 = nn.Parameter(torch.zeros(1, hid, res // 2, res // 2))
+        # denoiser U-Net: res -> res/2 (+ h) -> res/4 -> back up (layer names are for res = 16)
         self.d_in = nn.Conv2d(7, ch, 3, padding=1)  # noisy frame + previous frame + its level
         self.d16 = ResBlock(ch, emb)
         self.d_down8 = nn.Conv2d(ch, 2 * ch, 3, stride=2, padding=1)
@@ -106,7 +112,7 @@ class VideoDenoiser(nn.Module):
         self.d_out = nn.Conv2d(ch, 3, 3, padding=1)
 
     def encode(self, x_ctx, k_ctx):
-        """x_ctx (N, 3, 16, 16) at levels k_ctx (N,) -> (N, hid, 8, 8)."""
+        """x_ctx (N, 3, res, res) at levels k_ctx (N,) -> (N, hid, res/2, res/2)."""
         e = self.level(k_ctx)
         return self.enc_down(F.silu(self.enc_res(self.enc_in(x_ctx), e)))
 
@@ -151,11 +157,12 @@ def make_noisy(x, k, eps):
     return (1 - k) * x + k * eps
 
 
-def train_video(model, levels_fn, data, steps=2000, batch=16, T=16, lr=2e-3, seed=0, log=None):
+def train_video(model, levels_fn, data, steps=2000, batch=16, T=16, lr=2e-3, seed=0, log=None, device="cpu"):
     """Generic training loop. levels_fn(B, T, generator) -> (k, k_ctx), both (B, T) in [0, 1].
     The target of frame t is noised to k[:, t]; the version of frame t the RNN reads is noised
     to k_ctx[:, t] with the *same* noise, so k_ctx == k means 'the RNN sees the noisy frame' and
     k_ctx == 0 means 'the RNN sees the clean frame'."""
+    model.to(device)
     g = torch.Generator().manual_seed(seed)
     torch.manual_seed(seed)
     frames, actions = data["frames"], data["actions"]
@@ -167,10 +174,10 @@ def train_video(model, levels_fn, data, steps=2000, batch=16, T=16, lr=2e-3, see
         i = torch.randint(N, (batch,), generator=g)
         o = torch.randint(L - T + 1, (batch,), generator=g)
         idx = o[:, None] + torch.arange(T)
-        x = to_tensor(frames[i[:, None].numpy(), idx.numpy()])
-        a = torch.as_tensor(actions[i[:, None].numpy(), idx.numpy()]).long()
-        k, k_ctx = levels_fn(batch, T, g)
-        eps = torch.randn(x.shape, generator=g)
+        x = to_tensor(frames[i[:, None].numpy(), idx.numpy()]).to(device)
+        a = torch.as_tensor(actions[i[:, None].numpy(), idx.numpy()]).long().to(device)
+        k, k_ctx = (v.to(device) for v in levels_fn(batch, T, g))
+        eps = torch.randn(x.shape, generator=g).to(device)
         x_hat = model(make_noisy(x, k, eps), k, make_noisy(x, k_ctx, eps), k_ctx, a)
         loss = ((x_hat - x) ** 2).mean()
         opt.zero_grad()
@@ -185,34 +192,58 @@ def train_video(model, levels_fn, data, steps=2000, batch=16, T=16, lr=2e-3, see
 
 
 @torch.no_grad()
-def sample_frame(model, h, prev, k_prev, n_steps, g, k_start=1.0, x_start=None):
+def sample_frame(model, h, prev, k_prev, n_steps, g, k_start=1.0, x_start=None, trajectory=None):
     """Denoise one frame from level k_start (pure noise by default) down to 0 with Euler steps
-    on the flow-matching velocity dx/dk = (x - x_hat) / k."""
+    on the flow-matching velocity dx/dk = (x - x_hat) / k. If `trajectory` is a list, every step
+    appends (k, x at level k, the model's clean-frame guess x_hat) to it."""
     B = h.shape[0]
-    x = torch.randn(B, 3, 16, 16, generator=g) if x_start is None else x_start
-    ks = torch.linspace(k_start, 0, n_steps + 1)
+    x = torch.randn(B, *prev.shape[1:], generator=g, device=prev.device) if x_start is None else x_start
+    ks = torch.linspace(k_start, 0, n_steps + 1, device=prev.device)
     for j in range(n_steps):  # ks[j] > 0 here, only the last step lands on k = 0
         k = ks[j].expand(B)
         x_hat = model.denoise(x, k, h, prev, k_prev)
+        if trajectory is not None:
+            trajectory.append((float(ks[j]), x.clone(), x_hat.clone()))
         x = x + (ks[j + 1] - ks[j]) * (x - x_hat) / ks[j]
     return x
 
 
+@torch.no_grad()
+def denoise_next_frame(model, context, actions, n_steps=10, seed=0):
+    """Read the real frames context (B, C, 3, H, W) with their actions, then generate the next
+    frame and record every Euler step. C = 0 generates a first frame, with no history at all.
+    Returns (trajectory, final frame); see sample_frame."""
+    dev = context.device
+    g = torch.Generator(device=dev).manual_seed(seed)
+    B, C = context.shape[:2]
+    h, zero = model.h0.expand(B, -1, -1, -1), torch.zeros(B, device=dev)
+    for t in range(C):
+        h = model.step(h, model.encode(context[:, t], zero), actions[:, t])
+    if C == 0:  # no previous frame: zeros at level 1, as in training
+        prev, k_prev = torch.zeros(B, 3, model.res, model.res, device=dev), torch.ones(B, device=dev)
+    else:
+        prev, k_prev = context[:, -1], zero
+    traj = []
+    x = sample_frame(model, h, prev, k_prev, n_steps, g, trajectory=traj)
+    return traj, x
+
+
 class ImaginedExplorer:
     """The explorer policy of mazeworld, but looking at *generated* frames: it walks forward
-    and turns for a while when the frame shows a wall right ahead (the pixel above the center
-    is bright wall instead of dark ceiling). Lets a model explore its own imagined maze."""
+    and turns for a while when the frame shows a wall right ahead (the pixels above the center
+    are bright wall instead of dark ceiling). Lets a model explore its own imagined maze."""
 
     def __init__(self, B, seed=0):
         self.rng = np.random.default_rng(seed)
         self.prev = np.zeros(B, dtype=np.int64)
 
-    def __call__(self, frames):  # frames (B, 3, 16, 16) in [-1, 1]
-        top = (frames[:, :, 1, 7:9].amax((1, 2)) + 1) / 2  # brightness above the center
+    def __call__(self, frames):  # frames (B, 3, H, W) in [-1, 1]
+        H, W = frames.shape[-2:]
+        top = (frames[:, :, H // 16, W // 2 - 1:W // 2 + 1].amin((1, 2)) + 1) / 2  # brightness above the center
         acts = []
         for b in range(len(frames)):
             p = int(self.prev[b])
-            if top[b] > 0.3:  # wall ahead: keep turning
+            if top[b] > 0.6:  # wall ahead: keep turning
                 a = p if p in (1, 2) else int(self.rng.choice([1, 2]))
             elif self.rng.random() < (0.85 if p == 0 else 0.4):
                 a = p
@@ -225,23 +256,24 @@ class ImaginedExplorer:
 
 @torch.no_grad()
 def rollout(model, context, actions, n_frames, k_ctx=0.0, n_steps=10, seed=0, renoise=None, policy=None):
-    """Autoregressive generation. context: (B, C, 3, 16, 16) real frames; actions: (B, >= C+n-1).
+    """Autoregressive generation. context: (B, C, 3, H, W) real frames; actions: (B, >= C+n-1).
     Each finished frame is fed back to the model at level k_ctx (0 = clean; > 0 = re-noised with
     fresh noise, which is what diffusion forcing allows). renoise(x, k_ctx, g) does the
     re-noising. If `policy` is given (e.g. ImaginedExplorer), it picks the actions after the
     context from the generated frames, and actions only needs to cover the context.
-    Returns (B, C + n_frames, 3, 16, 16), and the actions used (B, C + n_frames)."""
-    g = torch.Generator().manual_seed(seed)
+    Returns (B, C + n_frames, 3, H, W), and the actions used (B, C + n_frames)."""
+    dev = context.device
+    g = torch.Generator(device=dev).manual_seed(seed)
     B, C = context.shape[:2]
     h = model.h0.expand(B, -1, -1, -1)
     frames = list(context.unbind(1))
 
-    k = torch.full((B,), float(k_ctx))
-    prev, k_prev = torch.zeros_like(context[:, 0]), torch.ones(B)
+    k = torch.full((B,), float(k_ctx), device=dev)
+    prev, k_prev = torch.zeros_like(context[:, 0]), torch.ones(B, device=dev)
 
     if renoise is None:
         def renoise(x, k, g):
-            return (1 - k) * x + k * torch.randn(x.shape, generator=g)
+            return (1 - k) * x + k * torch.randn(x.shape, generator=g, device=x.device)
 
     used = [actions[:, t] for t in range(C)]
     if policy is not None:
@@ -270,21 +302,22 @@ def rollout_full_sequence(model, context, actions, n_frames, chunk=8, n_steps=10
     clip at one shared noise level, so it cannot read clean past frames. Instead we generate
     `chunk` new frames at a time, inside a window that also holds the last `chunk` known frames,
     and at every denoising step we overwrite ('replace') the known frames with fresh noisy
-    copies at the current level k. context: (B, C >= chunk, 3, 16, 16)."""
-    g = torch.Generator().manual_seed(seed)
+    copies at the current level k. context: (B, C >= chunk, 3, H, W)."""
+    dev = context.device
+    g = torch.Generator(device=dev).manual_seed(seed)
     B = context.shape[0]
     frames = list(context.unbind(1))
     while len(frames) < context.shape[1] + n_frames:
         t0 = len(frames) - chunk  # window = frames[t0 : t0 + 2 * chunk]
         known = torch.stack(frames[t0:], 1)
         a = actions[:, t0:t0 + 2 * chunk]
-        new = torch.randn(B, chunk, 3, 16, 16, generator=g)
+        new = torch.randn(B, chunk, *context.shape[2:], generator=g, device=dev)
         ks = torch.linspace(1, 0, n_steps + 1)
         for j in range(n_steps):
             k = ks[j]
-            noisy_known = (1 - k) * known + k * torch.randn(known.shape, generator=g)
+            noisy_known = (1 - k) * known + k * torch.randn(known.shape, generator=g, device=dev)
             window = torch.cat([noisy_known, new], 1)
-            kk = torch.full(window.shape[:2], float(k))
+            kk = torch.full(window.shape[:2], float(k), device=dev)
             x_hat = model(window, kk, window, kk, a)[:, chunk:]
             new = new + (ks[j + 1] - k) * (new - x_hat) / k
         frames.extend(new.clamp(-1, 1).unbind(1))
@@ -294,10 +327,10 @@ def rollout_full_sequence(model, context, actions, n_frames, chunk=8, n_steps=10
 @torch.no_grad()
 def generate_clip(model, actions, T=16, n_steps=10, seed=0, levels="joint"):
     """Generate a clip from nothing. levels="joint": all frames share one level and are denoised
-    together (how a full-sequence model samples). Returns (B, T, 3, 16, 16)."""
+    together (how a full-sequence model samples). Returns (B, T, 3, res, res)."""
     g = torch.Generator().manual_seed(seed)
     B = actions.shape[0]
-    x = torch.randn(B, T, 3, 16, 16, generator=g)
+    x = torch.randn(B, T, 3, model.res, model.res, generator=g)
     ks = torch.linspace(1, 0, n_steps + 1)
     for j in range(n_steps):
         kk = torch.full((B, T), float(ks[j]))
@@ -306,16 +339,26 @@ def generate_clip(model, actions, T=16, n_steps=10, seed=0, levels="joint"):
     return x.clamp(-1, 1)
 
 
-def frame_bank(n_episodes=500, seed=12345):
-    """Real frames to compare generated ones against: (M, 768) in [-1, 1]."""
+POOL = 8  # realism compares frames average-pooled to POOL x POOL: layout and colors, not texture
+
+
+def _pool(frames):
+    """(..., 3, H, W) -> (N, 3 POOL^2): average-pooled and flattened."""
+    f = torch.nan_to_num(frames, nan=0.0).clamp(-1, 1).reshape(-1, *frames.shape[-3:])
+    return F.adaptive_avg_pool2d(f, POOL).flatten(1)
+
+
+def frame_bank(n_episodes=500, seed=12345, size=16):
+    """Real frames to compare generated ones against, pooled: (M, 3 POOL^2) in [-1, 1]."""
     import mazeworld as mw
-    f = mw.dataset(n_episodes, 32, 16, seed=seed)["frames"]
-    return to_tensor(f.reshape(-1, 16, 16, 3)).reshape(-1, 768)
+    f = mw.dataset(n_episodes, 32, size, seed=seed)["frames"]
+    return _pool(to_tensor(f.reshape(-1, size, size, 3)))
 
 
 def realism(frames, bank):
-    """Mean distance from each generated frame to its nearest real frame (lower = more like real
-    data). frames (..., 3, 16, 16) float; bank (M, 768) float in [-1, 1]. Returns (...) tensor."""
-    f = torch.nan_to_num(frames, nan=0.0).clamp(-1, 1).reshape(-1, bank.shape[1])
-    d = torch.cdist(f, bank).min(1).values / math.sqrt(bank.shape[1])
+    """Distance from each generated frame to its nearest real frame, both average-pooled to
+    POOL x POOL (lower = more like real data). The pooling makes the measure about the layout and
+    the colors of a frame rather than its fine texture, and the same for every resolution.
+    frames (..., 3, H, W) float; bank from frame_bank(). Returns (...) tensor."""
+    d = torch.cdist(_pool(frames), bank).min(1).values / math.sqrt(bank.shape[1])
     return d.reshape(frames.shape[:-3])

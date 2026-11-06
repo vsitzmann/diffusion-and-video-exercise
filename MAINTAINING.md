@@ -34,12 +34,17 @@ course/policy.py      notebook 4: next-frame U-Net denoiser (DIAMOND-style frame
                       Euler sampling, generate/imagine, train_video, IDM + train_idm, navigate
                       (closed loop), viewer_html (three.js viewer, template course/assets/viewer4.html)
 course/assets/        viewer4.html; nb4_reference.json = GPU results of the pretrained nb4 models
-mazeworld/            maze generation, explorer policy, dynamics (NumPy) + render_numpy.py
+mazeworld/            maze generation, explorer policy, dynamics (NumPy)
+                      museum.py: notebook 3's renderer since Nov 6 (brick walls, paintings, ceiling lamps;
+                      NumPy only, reuses world4.cast); world.render calls it
+                      render_numpy.py + rust/: the old flat-colored raycaster, no longer used by any notebook
                       world4.py: notebook 4's 64x64 textured world (NumPy only), expert, dataset()
-rust/                 PyO3/maturin crate mazeworld_rs: the same raycaster, rayon-parallel
+rust/                 PyO3/maturin crate mazeworld_rs: the old raycaster, rayon-parallel (unused)
 checkpoints/          shipped video checkpoints (1500 steps, seed 0, = the notebook default; tools/train_checkpoints.py)
+                      nb3_big_*.pt + nb3_big_results.npz: notebook 3's big 32x32 models and their Part 5 results
                       nb4_video16/64.pt, nb4_idm16/64.pt: notebook 4 (fp16 EMA weights, trained on schadenfreude)
-tools/                train_checkpoints.py, check_parity.py, test_notebooks.sh
+tools/                train_checkpoints.py, check_parity.py, test_notebooks.sh,
+                      nb3_train_gpu.py + nb3_evaluate.py (notebook 3 checkpoints and Part 5 results on a GPU)
 run                   resource-capped wrapper (4 cores, 4 GB, nice 19), same as gen_models_exploration
 dev/                  scratch (gitignored): prototypes, exported HTML, screenshots
 ```
@@ -55,10 +60,9 @@ dev/                  scratch (gitignored): prototypes, exported HTML, screensho
   there. `QC_AUTORUN=1` presses notebook 3's training button.
 - marimo rules: every global name may be defined in only one cell; prefix cell-local names with
   `_`. Keep heavy work behind `mo.stop` / run buttons when it takes more than a few seconds.
-- After changing either raycaster, run `tools/check_parity.py`. The two must agree pixel for
-  pixel (they do: max difference 0). Rebuild the Rust wheel with
-  `PATH=$HOME/.cargo/bin:$PATH .venv/bin/maturin build --release -m rust/Cargo.toml -o dev/wheels`
-  and `pip install` it. The toolchain is user-local (rustup, `~/.cargo`).
+- `tools/check_parity.py` compares the old NumPy and Rust raycasters (render_numpy, rust/).
+  Notebook 3 no longer uses either; it renders with mazeworld/museum.py (about 1 ms per 16x16
+  frame, 1.6 ms per 32x32 frame on one core).
 - Notation (Vincent's decision, Nov 5): the lecture's, which is Sander Dieleman's. Data $x$ at
   $t=0$, noise $\epsilon \sim \mathcal N(0, I)$ at $t=1$, noisy point $x_t = \alpha_t x + \sigma_t\epsilon$,
   here the straight line $x_t = (1-t)x + t\epsilon$ with velocity $\epsilon - x$; sampling runs from
@@ -105,6 +109,40 @@ dev/                  scratch (gitignored): prototypes, exported HTML, screensho
   it shows *less* divergence than replaying the test episode's actions, so the notebook uses
   the GT actions.
 - Full-sequence continuation uses chunked replacement sampling (8 known + 8 new frames).
+
+## Notebook 3 since Nov 6, 2026: the museum world and the big model
+
+- **World.** `mazeworld/museum.py` draws the same block mazes and dynamics as before: cream brick
+  walls with framed procedural paintings (muted palettes; CIFAR is not available on laptops),
+  a slate ceiling with round lamps, a grey floor with light pools. The old Oct 30 measurements
+  below were made in the old flat-colored world; they no longer apply in detail.
+- **Realism measure.** `video.realism` now compares frames average-pooled to 8x8 (`POOL`) with the
+  nearest of 16k real frames; a frame is "broken" above 0.2 (notebook `BROKEN`). At full
+  resolution textured frames are rarely close to any bank frame (real frames already scored 0.125),
+  so nothing separated. Known blind spots: blotchy texture artifacts (the big teacher-forced model
+  with re-noised context scores like real video) and freezing in front of a wall.
+- **Small checkpoints** (`checkpoints/{full_sequence,teacher_forcing,diffusion_forcing}.pt`): the
+  notebook's own settings (1500 steps, batch 16, lr 2e-3, `mw.dataset(2000, 32, 16, seed=0)`),
+  trained on schadenfreude with `tools/nb3_train_gpu.py`.
+- **Big model** (`checkpoints/nb3_big_*.pt`, fp16): `VideoDenoiser(**video.BIG)` (ch 48, hid 96,
+  emb 128, res 32; 2.88M parameters) with the unchanged `train_video`, 20k steps, batch 32,
+  lr 1e-3, 20k episodes at 32x32, about 50 min per regime on an A6000. Runs in
+  `/nobackup/nvme1/sitzmann/video_nb3/runs/big_*`. `nb3_big_results.npz` = Part 5 for the
+  big models (`tools/nb3_evaluate.py --device cuda`, 32 test episodes, 200 frames; videos of the
+  three episodes where teacher forcing breaks most). Rolling them out takes about 15 s on a GPU,
+  minutes on a laptop CPU, hence the precomputed file. The bonus play cell uses `nb3_big_diffusion_forcing.pt`.
+- **Measured** (32 episodes, last quarter of 200 frames, broken = pooled distance > 0.2; real video
+  about 1%): small models: teacher forcing clean 12% (25% of episodes), re-noised 0.1 0%,
+  diffusion forcing 2–3%, full sequence 0%. Big models: teacher forcing clean 11% (19% of
+  episodes), re-noised 0% by the measure but visibly covered in blue blotches (it copies the noise),
+  diffusion forcing 1–2%, full sequence 0%. During training the big diffusion-forcing model was
+  much worse: 58% broken at 5k steps (it walked into large dark paintings and stayed there), 5–12%
+  at 10k. Judge only final checkpoints.
+- **A variant with smaller, lighter paintings** (Nov 6, `/nobackup/nvme1/sitzmann/video_nb3_v2`)
+  was cleaner for the small models (teacher forcing 22%, diffusion forcing 0%) but the big
+  teacher-forced model hardly broke (1%), so exposure bias was invisible at 32x32. Not used.
+- Rollout code (`sample_frame`, `rollout`, `rollout_full_sequence`) draws its noise on the
+  context's device, so it runs on a GPU; on CPU the random streams are unchanged.
 
 ## Notebook 4 (Nov 4, 2026)
 
