@@ -54,7 +54,9 @@ mazeworld/     the small maze world the video models are trained on
 You may read the solutions and the checks to understand what the student is aiming for and to
 judge how close they are. Never quote them.
 
-Everything is PyTorch (no JAX). Use the notation of the notebooks: $x$ is data, $z$ or $\epsilon$
-is noise. In flow matching (Lipman et al.), $t$ runs from noise $x_0 = \epsilon$ at $t = 0$ to data
-$x_1$ at $t = 1$, and $x_t = t x_1 + (1 - t)\epsilon$. In notebook 3, $t$ is the frame index and the
-noise level is $k$ (1 = clean).
+Everything is PyTorch (no JAX). Use the notation of the notebooks, which is the lecture's
+(Sander Dieleman's): $x$ is data, $\epsilon$ is noise. $t$ runs from data at $t = 0$ to noise at
+$t = 1$, the noisy point is $x_t = (1 - t)\,x + t\,\epsilon$, its velocity is $\epsilon - x$, and
+sampling runs from $t = 1$ down to $t = 0$. Many papers (Lipman et al.) run time the other way;
+if a student is confused by a paper, point that out. In notebooks 3 and 4, $t$ is the frame index
+and the noise level is $k$ (0 = clean, 1 = pure noise).

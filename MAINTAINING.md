@@ -59,11 +59,20 @@ dev/                  scratch (gitignored): prototypes, exported HTML, screensho
   pixel (they do: max difference 0). Rebuild the Rust wheel with
   `PATH=$HOME/.cargo/bin:$PATH .venv/bin/maturin build --release -m rust/Cargo.toml -o dev/wheels`
   and `pip install` it. The toolchain is user-local (rustup, `~/.cargo`).
-- Notation (Vincent's decision, Nov 2): data is $x$, noise/latent is $z$ or $\epsilon$, in every
-  notebook. Never use 6.S184's $z$-as-data. Flow matching follows Lipman et al.: the moving point
-  is $x$, the data point $x_1$ (code: `x1`, training set `X1`), noise $x_0 = \epsilon$ at $t=0$;
-  $p_t(x \mid x_1)$, $u_t(x \mid x_1)$, $x_t = t x_1 + (1-t)\epsilon$. In notebook 3 the noise level
-  is $k$ (1 = clean), because $t$ is the frame index.
+- Notation (Vincent's decision, Nov 5): the lecture's, which is Sander Dieleman's. Data $x$ at
+  $t=0$, noise $\epsilon \sim \mathcal N(0, I)$ at $t=1$, noisy point $x_t = \alpha_t x + \sigma_t\epsilon$,
+  here the straight line $x_t = (1-t)x + t\epsilon$ with velocity $\epsilon - x$; sampling runs from
+  $t=1$ down to $t=0$ ($x_{t-h} = x_t - h\,u_t(x_t)$). $p_t(x_t \mid x)$, $u_t(x_t \mid x) = (x_t - x)/t$,
+  posterior mean $\hat x(x_t, t) = \mathbb E[x \mid x_t]$. Code: data `x`, training set `X`, noisy
+  point `x_t`, noise `eps`. The one-step generator of notebook 1 also takes noise $\epsilon$. Never
+  use $z$ for noise or data ($z$ only for learned latents), and never Lipman's $x_1$-as-data.
+  Plots keep noise on the left and data on the right. In notebooks 3 and 4 the noise level is $k$,
+  because $t$ is the frame index: $x_t^k = (1-k)x_t + k\epsilon$, $k = 0$ clean, $k = 1$ pure noise,
+  and sampling runs from $k=1$ down to $k=0$. A missing frame ("no history") is level 1.
+  **The shipped checkpoints were trained with the old convention** ($k = 1$ clean), so the networks
+  read $1-k$. That conversion happens in exactly one place per model: `net_level()` in
+  course/video.py and the top of `Denoiser.forward` in course/policy.py. Keep it there. Before and
+  after the switch (Nov 5), rollouts and closed-loop runs on fixed seeds matched to float precision.
 
 ## What the experiments showed (Oct 30, 2026), and the settings that depend on it
 
@@ -89,7 +98,7 @@ dev/                  scratch (gitignored): prototypes, exported HTML, screensho
   every frame is mostly a copy of the last) makes it robust. At 1500 steps, 200-frame rollouts (32
   episodes, GT actions) had these fractions of broken frames (distance to the nearest real frame
   > 0.3) in the last quarter: teacher forcing with clean context 0.32 / 0.23 / 0.24 (seeds 0/1/2),
-  with context re-noised to k = 0.9 0.02–0.04, diffusion forcing 0.00. Teacher forcing also freezes
+  with context re-noised to k = 0.1 0.02–0.04, diffusion forcing 0.00. Teacher forcing also freezes
   (frame-to-frame motion drops from 0.13 to 0.08). Rollouts feed the raw output back (only
   nan_to_num and ±10 to keep numbers finite).
 - `ImaginedExplorer` (course/video.py) picks actions from generated frames. It looks nicer, but
@@ -105,7 +114,8 @@ dev/                  scratch (gitignored): prototypes, exported HTML, screensho
   The 16×16 model was trained on box-filtered 64×64 frames; the notebook renders 16×16 directly
   with 4×4 supersampling (mean difference 1.4/255), and closed-loop success is unchanged.
 - **What the goal conditioning needed.** An egocentric map (not the global one) and the plain
-  x-loss with noise levels biased toward noise (logit-normal, mean −0.8). JiT's v-loss weighting
+  x-loss with noise levels biased toward noise (logit-normal, mean +0.8 in the noise-level
+  convention; it was −0.8 when $k = 1$ meant clean). JiT's v-loss weighting
   made the model ignore the map. Don't change these without re-measuring the direction match.
 - **Measured** (64 held-out mazes, 400-step budget, `course/assets/nb4_reference.json`): closed-loop
   success at w = 0/1/3, 10 Euler steps: 16×16 12/86/92%, 64×64 12/77/97%; one Euler step at w = 3:

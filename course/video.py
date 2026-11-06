@@ -1,15 +1,15 @@
 """Tiny action-conditioned video diffusion model: a conv-RNN that reads past frames, and a small
 conv U-Net that denoises the next frame. Used by 03_video_world_model.py.
 
-Noise levels follow notebook 2: a frame at level k is  x^k = k * x + (1 - k) * eps,
-so k = 0 is pure noise and k = 1 is the clean frame. Every frame t has its own level.
+Noise levels follow the lecture: a frame at noise level k is  x^k = (1 - k) * x + k * eps,
+so k = 0 is the clean frame and k = 1 is pure noise. Every frame t has its own level.
 
 Indexing: frames x_0 .. x_{T-1}; action a_t takes x_t to x_{t+1}.
     h_t = GRU(h_{t-1}, Enc(context version of x_t, its level), a_t)
     x_hat_{t+1} = Den(noisy x_{t+1}, its level | h_t, context version of x_t)
 The denoiser sees the previous frame directly (most of the next frame is a shifted copy of it)
 and everything older through the RNN state h. Frame 0 is denoised from a learned initial
-state and an all-zero "previous frame" at level 0.
+state and an all-zero "previous frame" at level 1 (pure noise).
 """
 import math
 import time
@@ -33,14 +33,21 @@ def to_uint8(x):
     return torch.nan_to_num(x, nan=0.0).clamp(-1, 1).add(1).mul(127.5).round().byte().movedim(-3, -1).numpy()
 
 
+def net_level(k):
+    """The level as the network reads it. The shipped checkpoints were trained when this code
+    used the opposite convention (k = 1 clean, k = 0 pure noise), so the network gets 1 - k.
+    This is the only place where the convention is converted."""
+    return 1 - k
+
+
 class LevelEmbed(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.mlp = nn.Sequential(nn.Linear(32, dim), nn.SiLU(), nn.Linear(dim, dim))
 
-    def forward(self, k):  # k: (N,) in [0, 1]
+    def forward(self, k):  # k: (N,) noise levels in [0, 1]
         f = torch.exp(torch.linspace(0, math.log(200), 16, device=k.device))
-        a = k[:, None] * f[None]
+        a = net_level(k)[:, None] * f[None]
         return self.mlp(torch.cat([a.sin(), a.cos()], 1))
 
 
@@ -110,7 +117,7 @@ class VideoDenoiser(nn.Module):
         """Predict the clean frame from a noisy one at level k, given the history state h and the
         previous frame (as the RNN saw it, at level k_prev)."""
         e = self.level(k)
-        lv = k_prev[:, None, None, None].expand(-1, 1, *x_noisy.shape[-2:])
+        lv = net_level(k_prev)[:, None, None, None].expand(-1, 1, *x_noisy.shape[-2:])
         a = self.d16(self.d_in(torch.cat([x_noisy, prev, lv], 1)), e)
         b = self.d_down8(a)
         b = self.d8(self.d_mix8(torch.cat([b, h], 1)), e)
@@ -132,23 +139,23 @@ class VideoDenoiser(nn.Module):
             hs.append(h)
         hs = torch.stack(hs, 1)  # hs[:, t] = state that has seen frames < t
         prev = torch.cat([torch.zeros_like(x_ctx[:, :1]), x_ctx[:, :-1]], 1)
-        k_prev = torch.cat([torch.zeros_like(k_ctx[:, :1]), k_ctx[:, :-1]], 1)
+        k_prev = torch.cat([torch.ones_like(k_ctx[:, :1]), k_ctx[:, :-1]], 1)  # frame 0: no previous frame
         out = self.denoise(x_noisy.flatten(0, 1), k.flatten(), hs.flatten(0, 1),
                            prev.flatten(0, 1), k_prev.flatten())
         return out.unflatten(0, (B, T))
 
 
 def make_noisy(x, k, eps):
-    """x^k = k x + (1 - k) eps, with one level per frame. x, eps: (B, T, 3, H, W); k: (B, T)."""
+    """x^k = (1 - k) x + k eps, with one level per frame. x, eps: (B, T, 3, H, W); k: (B, T)."""
     k = k[:, :, None, None, None]
-    return k * x + (1 - k) * eps
+    return (1 - k) * x + k * eps
 
 
 def train_video(model, levels_fn, data, steps=2000, batch=16, T=16, lr=2e-3, seed=0, log=None):
     """Generic training loop. levels_fn(B, T, generator) -> (k, k_ctx), both (B, T) in [0, 1].
     The target of frame t is noised to k[:, t]; the version of frame t the RNN reads is noised
     to k_ctx[:, t] with the *same* noise, so k_ctx == k means 'the RNN sees the noisy frame' and
-    k_ctx == 1 means 'the RNN sees the clean frame'."""
+    k_ctx == 0 means 'the RNN sees the clean frame'."""
     g = torch.Generator().manual_seed(seed)
     torch.manual_seed(seed)
     frames, actions = data["frames"], data["actions"]
@@ -178,16 +185,16 @@ def train_video(model, levels_fn, data, steps=2000, batch=16, T=16, lr=2e-3, see
 
 
 @torch.no_grad()
-def sample_frame(model, h, prev, k_prev, n_steps, g, k_start=0.0, x_start=None):
-    """Denoise one frame from level k_start (pure noise by default) to 1 with Euler steps on
-    the flow-matching velocity v = (x_hat - x) / (1 - k)."""
+def sample_frame(model, h, prev, k_prev, n_steps, g, k_start=1.0, x_start=None):
+    """Denoise one frame from level k_start (pure noise by default) down to 0 with Euler steps
+    on the flow-matching velocity dx/dk = (x - x_hat) / k."""
     B = h.shape[0]
     x = torch.randn(B, 3, 16, 16, generator=g) if x_start is None else x_start
-    ks = torch.linspace(k_start, 1, n_steps + 1)
-    for j in range(n_steps):
+    ks = torch.linspace(k_start, 0, n_steps + 1)
+    for j in range(n_steps):  # ks[j] > 0 here, only the last step lands on k = 0
         k = ks[j].expand(B)
         x_hat = model.denoise(x, k, h, prev, k_prev)
-        x = x + (ks[j + 1] - ks[j]) * (x_hat - x) / (1 - ks[j])
+        x = x + (ks[j + 1] - ks[j]) * (x - x_hat) / ks[j]
     return x
 
 
@@ -217,9 +224,9 @@ class ImaginedExplorer:
 
 
 @torch.no_grad()
-def rollout(model, context, actions, n_frames, k_ctx=1.0, n_steps=10, seed=0, renoise=None, policy=None):
+def rollout(model, context, actions, n_frames, k_ctx=0.0, n_steps=10, seed=0, renoise=None, policy=None):
     """Autoregressive generation. context: (B, C, 3, 16, 16) real frames; actions: (B, >= C+n-1).
-    Each finished frame is fed back to the model at level k_ctx (1 = clean; < 1 = re-noised with
+    Each finished frame is fed back to the model at level k_ctx (0 = clean; > 0 = re-noised with
     fresh noise, which is what diffusion forcing allows). renoise(x, k_ctx, g) does the
     re-noising. If `policy` is given (e.g. ImaginedExplorer), it picks the actions after the
     context from the generated frames, and actions only needs to cover the context.
@@ -230,11 +237,11 @@ def rollout(model, context, actions, n_frames, k_ctx=1.0, n_steps=10, seed=0, re
     frames = list(context.unbind(1))
 
     k = torch.full((B,), float(k_ctx))
-    prev, k_prev = torch.zeros_like(context[:, 0]), torch.zeros(B)
+    prev, k_prev = torch.zeros_like(context[:, 0]), torch.ones(B)
 
     if renoise is None:
         def renoise(x, k, g):
-            return k * x + (1 - k) * torch.randn(x.shape, generator=g)
+            return (1 - k) * x + k * torch.randn(x.shape, generator=g)
 
     used = [actions[:, t] for t in range(C)]
     if policy is not None:
@@ -272,14 +279,14 @@ def rollout_full_sequence(model, context, actions, n_frames, chunk=8, n_steps=10
         known = torch.stack(frames[t0:], 1)
         a = actions[:, t0:t0 + 2 * chunk]
         new = torch.randn(B, chunk, 3, 16, 16, generator=g)
-        ks = torch.linspace(0, 1, n_steps + 1)
+        ks = torch.linspace(1, 0, n_steps + 1)
         for j in range(n_steps):
             k = ks[j]
-            noisy_known = k * known + (1 - k) * torch.randn(known.shape, generator=g)
+            noisy_known = (1 - k) * known + k * torch.randn(known.shape, generator=g)
             window = torch.cat([noisy_known, new], 1)
             kk = torch.full(window.shape[:2], float(k))
             x_hat = model(window, kk, window, kk, a)[:, chunk:]
-            new = new + (ks[j + 1] - k) * (x_hat - new) / (1 - k)
+            new = new + (ks[j + 1] - k) * (new - x_hat) / k
         frames.extend(new.clamp(-1, 1).unbind(1))
     return torch.stack(frames[:context.shape[1] + n_frames], 1)
 
@@ -291,11 +298,11 @@ def generate_clip(model, actions, T=16, n_steps=10, seed=0, levels="joint"):
     g = torch.Generator().manual_seed(seed)
     B = actions.shape[0]
     x = torch.randn(B, T, 3, 16, 16, generator=g)
-    ks = torch.linspace(0, 1, n_steps + 1)
+    ks = torch.linspace(1, 0, n_steps + 1)
     for j in range(n_steps):
         kk = torch.full((B, T), float(ks[j]))
         x_hat = model(x, kk, x, kk, actions[:, :T])
-        x = x + (ks[j + 1] - ks[j]) * (x_hat - x) / (1 - ks[j])
+        x = x + (ks[j + 1] - ks[j]) * (x - x_hat) / ks[j]
     return x.clamp(-1, 1)
 
 

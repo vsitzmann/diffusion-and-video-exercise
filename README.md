@@ -84,8 +84,9 @@ uv pip install ./rust     # or: pip install ./rust
 ## References
 
 - Flow matching: Holderrieth & Erives, *An Introduction to Flow Matching and Diffusion Models*
-  (MIT 6.S184). The notebooks use the notation of Lipman et al., *Flow Matching for Generative
-  Modeling* (2023): data $x_1$ at $t = 1$, noise $x_0 = \epsilon$ at $t = 0$.
+  (MIT 6.S184). The notebooks use the lecture's notation (Sander Dieleman's): data $x$ at $t = 0$, noise
+  $\epsilon$ at $t = 1$, $x_t = (1 - t)\,x + t\,\epsilon$. Lipman et al., *Flow Matching for Generative
+  Modeling* (2023), run time the other way.
 - Drifting models: Deng et al., *Generative Modeling via Drifting* (2026).
 - x-prediction in high dimensions: Li & He, *Back to Basics: Let Denoising Generative Models
   Denoise* (JiT, 2025).

@@ -28,8 +28,9 @@ class Generator(nn.Module):
 class FlowNet(nn.Module):
     """Flow-matching network on R^D, conditioned on the time t in [0, 1].
 
-    pred="x": the network outputs a guess of the clean data point, x1_hat = E[x1 | X_t = x], and
-              the velocity is computed from it: u = (x1_hat - x) / (1 - t). This is JiT's choice
+    Time runs from data (t = 0) to noise (t = 1): x_t = (1 - t) x + t eps, velocity eps - x.
+    pred="x": the network outputs a guess of the clean data point, x_hat = E[x | x_t], and
+              the velocity is computed from it: u = (x_t - x_hat) / t. This is JiT's choice
               (Li & He, 2025) and works much better when the data lives on a thin sheet in high D.
     pred="v": the network outputs the velocity directly.
     """
@@ -47,15 +48,15 @@ class FlowNet(nn.Module):
     def forward(self, x, t):
         return self.net(torch.cat([x, self._t_features(t)], -1))
 
-    def velocity(self, x, t):
-        out = self(x, t)
+    def velocity(self, x_t, t):
+        out = self(x_t, t)
         if self.pred == "v":
             return out
-        return (out - x) / (1 - t).clamp(min=self.t_clip)
+        return (x_t - out) / t.clamp(min=self.t_clip)
 
-    def denoise(self, x, t):
+    def denoise(self, x_t, t):
         """The network's guess of the clean data point."""
-        out = self(x, t)
+        out = self(x_t, t)
         if self.pred == "x":
             return out
-        return x + (1 - t) * out
+        return x_t - t * out

@@ -107,7 +107,7 @@ def _(mo):
 
     The model is a next-frame denoiser, like the ones that simulate games (DIAMOND, GameNGen). A
     U-Net receives the noisy next frame $x_t^{k}$ at noise level $k$ (as in notebook 3,
-    $x^{k} = k\,x + (1-k)\,\epsilon$, so $k = 1$ is clean), the last 4 frames stacked as extra
+    $x^{k} = (1-k)\,x + k\,\epsilon$, so $k = 0$ is clean), the last 4 frames stacked as extra
     input channels, and predicts the clean frame:
 
     $$
@@ -115,7 +115,7 @@ def _(mo):
     $$
 
     - **History.** Each past frame comes with its *own* noise level $\tilde k_j$, as in diffusion
-      forcing. Level 0 means the frame is pure noise, so the model has to do without it.
+      forcing. Level 1 means the frame is pure noise, so the model has to do without it.
     - **Actions** $a$: forward, left, right, or a fourth token "no action given".
     - **Goal map** $m$: a small map centered on the agent and rotated so that "ahead" is up
       (as in CueNav): walls, the goal, and how far each cell is from the goal. Or "no map".
@@ -180,7 +180,7 @@ def _(mo):
 
     The training code calls your function three times per batch: for the actions
     (`null` = the "no action" token, $p = 0.7$ for expert drives), for the map (`null` = NaN,
-    which the network reads as "no map") and for the whole history (`null` = noise level 0,
+    which the network reads as "no map") and for the whole history (`null` = noise level 1,
     $p = 0.1$). `p` is either a number or a tensor with one probability per row. Use
     `torch.rand(B, generator=g, device=cond.device)` and `torch.where`. Careful: one decision
     per *row*, so reshape the mask to `(B, 1, 1, ...)` to match the shape of `cond`.
@@ -222,7 +222,7 @@ def _(RES, mo, ok_drop):
         data also shows how to recover from mistakes. Each training example is one frame with its
         4-frame history; the loss is the plain squared error of the clean-frame prediction,
         $\|\hat x - x\|^2$, with the noise level $k$ drawn mostly toward the noisy end. (That
-        choice matters: when $k$ is close to 1, the noisy frame already shows where the agent
+        choice matters: when $k$ is close to 0, the noisy frame already shows where the agent
         went, and the model learns to ignore the map.)
 
         - **Pretrained:** {"a 3.7M-parameter model at 16×16, about 40k steps on a GPU" if RES == 16 else "a 16.8M-parameter model at 64×64, 30k steps (about 1.5 hours) on a GPU"}.
@@ -370,8 +370,8 @@ def _(mo):
 
     We give the model the first 4 frames of a held-out episode and the actions that were really
     taken, and it generates the next frames one at a time, feeding its own frames back as
-    history. Each frame is sampled with deterministic Euler steps from noise ($k = 0$) to clean
-    ($k = 1$), as in notebook 2.
+    history. Each frame is sampled with deterministic Euler steps from noise ($k = 1$) to clean
+    ($k = 0$), as in notebook 2.
 
     **🤔 Predict first.** Everyone samples with many steps, often 10 to 50. What happens with only
     **one** Euler step? (Hint: notebook 1. What does a network trained with a squared error
@@ -442,19 +442,19 @@ def _(AUTORUN, DEV, P, RES, idm, mo, np, plots, plt, torch, val, video_model, wm
 
 @app.cell(hide_code=True)
 def _(mo):
-    k_sliders = mo.ui.array([mo.ui.slider(0.0, 1.0, step=0.1, value=1.0, label=f"frame t−{4 - j}", show_value=True)
-                             for j in range(4)], label="noise level of each history frame (1 = clean, 0 = pure noise)")
+    k_sliders = mo.ui.array([mo.ui.slider(0.0, 1.0, step=0.1, value=0.0, label=f"frame t−{4 - j}", show_value=True)
+                             for j in range(4)], label="noise level of each history frame (0 = clean, 1 = pure noise)")
     mo.vstack([
         mo.md(r"""
         ## Part 6 · Diffusion forcing: choosing what to condition on
 
         Because every history frame was trained at its own noise level, we can decide at test
-        time **how much the model should trust each past frame**, frame by frame. Level 1 shows
-        a frame as it is, level 0 hides it completely, anything in between keeps the coarse
+        time **how much the model should trust each past frame**, frame by frame. Level 0 shows
+        a frame as it is, level 1 hides it completely, anything in between keeps the coarse
         layout and hides the details.
 
-        **🤔 Predict first.** (a) If all four history frames are at level 0, what will the
-        model imagine? (b) If only the most recent frame $t-1$ is at 0 and the older three are
+        **🤔 Predict first.** (a) If all four history frames are at level 1, what will the
+        model imagine? (b) If only the most recent frame $t-1$ is at 1 and the older three are
         clean, how good is the next frame?
         """),
         mo.accordion({"Answer (click after you have guessed)": mo.md(r"""
@@ -533,7 +533,7 @@ def _(mo):
 
     $w = 1$ is the ordinary conditional model, $w = 0$ ignores the condition, and $w > 1$
     exaggerates what the condition changes. (Usually guidance is written for the velocity $u$
-    instead of $\hat x$. Here the Euler velocity is $(\hat x - x)/(1-k)$, which is linear in
+    instead of $\hat x$. Here the Euler velocity is $(x - \hat x)/k$, which is linear in
     $\hat x$, so the two are the same thing.) The sampler runs both predictions as one batch and
     combines them with your function at every Euler step.
 
@@ -569,7 +569,7 @@ def _(mo, ok_guide):
         ### History guidance
 
         The first condition to guide is the **history**. The unconditional prediction gets every
-        history frame at level 0 (it never sees the past) but still knows the actions. With
+        history frame at level 1 (it never sees the past) but still knows the actions. With
         $w > 1$ the model should lean harder on what the past frames tell it, and long videos
         should stay more consistent. Large video models that tend to forget their past use this
         (Song et al., *History-Guided Video Diffusion*, 2025).

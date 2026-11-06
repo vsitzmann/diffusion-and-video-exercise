@@ -72,19 +72,19 @@ def _(mo):
     A one-step generator is a neural network $G_\theta$ that maps noise to data:
 
     $$
-    z \sim \mathcal N(0, I), \qquad x = G_\theta(z).
+    \epsilon \sim \mathcal N(0, I), \qquad x = G_\theta(\epsilon).
     $$
 
     We know how to train networks with regression. So let's do the obvious thing: draw some
-    noise $z$, draw a random training point $x$, and make $G_\theta(z)$ close to $x$:
+    noise $\epsilon$, draw a random training point $x$, and make $G_\theta(\epsilon)$ close to $x$:
 
     $$
-    \min_\theta\; \mathbb E_{z,\,x}\, \big\| G_\theta(z) - x \big\|^2, \qquad z \perp x .
+    \min_\theta\; \mathbb E_{\epsilon,\,x}\, \big\| G_\theta(\epsilon) - x \big\|^2, \qquad \epsilon \perp x .
     $$
 
     ### ✏️ Exercise 1
 
-    Implement this loss for a batch: `z` and `x` both have shape `(batch, 2)`. Return the squared
+    Implement this loss for a batch: `eps` and `x` both have shape `(batch, 2)`. Return the squared
     distance summed over the 2 coordinates and averaged over the batch.
     """)
     return
@@ -92,8 +92,8 @@ def _(mo):
 
 @app.cell
 def _(torch):
-    def regression_loss(G, z, x):
-        """G: the generator network. z: noise (B, 2). x: random training points (B, 2)."""
+    def regression_loss(G, eps, x):
+        """G: the generator network. eps: noise (B, 2). x: random training points (B, 2)."""
         # ✏️ your code here (one line)
         raise NotImplementedError
     return (regression_loss,)
@@ -112,12 +112,12 @@ def _(mo):
     mo.callout(mo.vstack([
         mo.md(r"""
         **🤔 Predict first.** The next cell trains $G_\theta$ with this loss and shows where 600
-        fixed noise vectors $z$ end up. Will the samples spread over the data, like a generative
+        fixed noise vectors $\epsilon$ end up. Will the samples spread over the data, like a generative
         model should? If not, what will they converge to?
         """),
         mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
         They don't spread out. All 600 samples converge to **one point, the mean of the data**,
-        whatever their $z$ was. The box below the animation shows why.
+        whatever their $\epsilon$ was. The box below the animation shows why.
         """)}),
     ]), kind="info")
     return
@@ -131,16 +131,16 @@ def _(Generator, ok_regression, mo, plots, regression_loss_impl, torch, toy, toy
         torch.manual_seed(seed)
         G = Generator(D=2)
         opt = torch.optim.Adam(G.parameters(), lr=1e-3)
-        z_show = torch.randn(600, 2)  # the same noise every time, so we can watch it move
+        eps_show = torch.randn(600, 2)  # the same noise every time, so we can watch it move
         snaps, titles = [], []
         for step in range(steps + 1):
             if step % 50 == 0:
                 with torch.no_grad():
-                    snaps.append(G(z_show))
+                    snaps.append(G(eps_show))
                 titles.append(f"step {step}")
-            z = torch.randn(batch, 2)
+            eps = torch.randn(batch, 2)
             x = toys.sample(toy.value, batch)
-            loss = regression_loss_impl(G, z, x)
+            loss = regression_loss_impl(G, eps, x)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -149,7 +149,7 @@ def _(Generator, ok_regression, mo, plots, regression_loss_impl, torch, toy, toy
     _snaps, _titles = train_regression()
     _data = toys.sample(toy.value, 2000, seed=0)
     mo.vstack([
-        mo.md("**Regression onto random training points.** Grey: data. Orange: $G_\\theta(z)$ for 600 fixed noise vectors."),
+        mo.md("**Regression onto random training points.** Grey: data. Orange: $G_\\theta(\\epsilon)$ for 600 fixed noise vectors."),
         (plots.animate_samples(_snaps, _data, _titles)),
     ])
     return
@@ -167,18 +167,18 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.accordion({"Why the mean? (click)": mo.md(r"""
-    Because $z$ and $x$ are independent, for every fixed $z$ the loss is
+    Because $\epsilon$ and $x$ are independent, for every fixed $\epsilon$ the loss is
 
     $$
-    \mathbb E_x \|G(z) - x\|^2 = \|G(z) - \mathbb E[x]\|^2 + \mathbb E_x\|x - \mathbb E[x]\|^2 .
+    \mathbb E_x \|G(\epsilon) - x\|^2 = \|G(\epsilon) - \mathbb E[x]\|^2 + \mathbb E_x\|x - \mathbb E[x]\|^2 .
     $$
 
-    The second term does not depend on $G$. The first is smallest when $G(z) = \mathbb E[x]$,
-    *for every* $z$. The noise carries no information about which target it will be compared to,
+    The second term does not depend on $G$. The first is smallest when $G(\epsilon) = \mathbb E[x]$,
+    *for every* $\epsilon$. The noise carries no information about which target it will be compared to,
     so the best the network can do is to hedge: output the average.
 
     With a condition $c$ (a text prompt, the past frames of a video), the same argument gives
-    $G(z, c) = \mathbb E[x \mid c]$: the *conditional* mean. For images, that is the familiar
+    $G(\epsilon, c) = \mathbb E[x \mid c]$: the *conditional* mean. For images, that is the familiar
     blurry average. Regression is not generative modeling.
     """)})
     return
@@ -190,7 +190,7 @@ def _(mo):
     ## Part 2 · A primitive drifting model
 
     To break the symmetry, the target for a sample must depend on **the sample itself**. Let
-    $y_i = G_\theta(z_i)$ be a batch of generated samples and $X = \{x_1, \dots, x_M\}$ a batch of
+    $y_i = G_\theta(\epsilon_i)$ be a batch of generated samples and $X = \{x^{(1)}, \dots, x^{(M)}\}$ a batch of
     training points. We give every sample a **drift** $V(y_i)$, a little arrow that says where it
     should move, made of two parts:
 
@@ -207,7 +207,7 @@ def _(mo):
     position, with the target held fixed ("stop-gradient", $\mathrm{sg}$):
 
     $$
-    \mathcal L(\theta) = \frac1B \sum_i \big\| G_\theta(z_i) - \mathrm{sg}\big[\,y_i + V(y_i)\,\big] \big\|^2 .
+    \mathcal L(\theta) = \frac1B \sum_i \big\| G_\theta(\epsilon_i) - \mathrm{sg}\big[\,y_i + V(y_i)\,\big] \big\|^2 .
     $$
 
     The gradient of this loss with respect to the output $y_i$ is $-2V(y_i)$, so each training step
@@ -292,12 +292,12 @@ def _(Generator, drift_target_impl, torch):
         opt = torch.optim.Adam(G.parameters(), lr=1e-3)
         x_ref = sample_data(1000)
         tau = tau_rel * torch.cdist(x_ref, x_ref).median()  # kernel width in units of the data scale
-        z_show = torch.randn(600, 2)
+        eps_show = torch.randn(600, 2)
         snaps, arrows, titles = [], [], []
         for step in range(steps + 1):
             if step % snap_every == 0:
                 with torch.no_grad():
-                    y_show = G(z_show)
+                    y_show = G(eps_show)
                     snaps.append(y_show)
                     arrows.append(drift_target_impl(y_show, sample_data(256), lam, tau) - y_show)
                 titles.append(f"step {step}")
@@ -335,10 +335,10 @@ def _(mo):
 
     - **Attraction only collapses.** Each sample looks only at the data, never at the other
       samples, so nothing stops them from all piling onto the same few training points. The
-      network shares its weights across all $z$, so once a few samples move to one place, their
+      network shares its weights across all $\epsilon$, so once a few samples move to one place, their
       neighbors follow.
     - **Repulsion fixes it.** Crowded samples push each other apart, so they spread over all the
-      data. That is a real (if crude) generative model: new $z$ gives new, plausible samples.
+      data. That is a real (if crude) generative model: new $\epsilon$ gives new, plausible samples.
     - **It is crude.** Samples also land in the gaps (try the rings or the checkerboard). The
       attraction is zero anywhere on the data, so only the repulsion decides how samples spread,
       and it spreads them evenly instead of following the data density.

@@ -99,7 +99,7 @@ def _(mo):
     $t$ is now the frame index): a frame at level $k$ is
 
     $$
-    x^{k} = k\, x + (1-k)\, \epsilon, \qquad k = 0: \text{pure noise}, \quad k = 1: \text{clean}.
+    x^{k} = (1-k)\, x + k\, \epsilon, \qquad k = 0: \text{clean}, \quad k = 1: \text{pure noise}.
     $$
 
     The key detail: **every frame has its own noise level**, and there are two versions of each
@@ -127,7 +127,7 @@ def _(mo):
     | regime | target levels $k_t$ | context levels $\tilde k_t$ | intuition |
     |---|---|---|---|
     | **full sequence** | one $k$ for the whole clip | $=k$ | treat the clip like one big image |
-    | **teacher forcing** | independent $k_t \sim U[0,1]$ | $1$ (clean) | like an LLM: always condition on the *true* past |
+    | **teacher forcing** | independent $k_t \sim U[0,1]$ | $0$ (clean) | like an LLM: always condition on the *true* past |
     | **diffusion forcing** | independent $k_t \sim U[0,1]$ | $=k_t$ | every frame at its own level, past frames are noisy too |
 
     ### ✏️ Exercise 1
@@ -234,7 +234,7 @@ def _(mo):
     mistakes.
 
     - **Teacher forcing** and **diffusion forcing** generate one frame at a time. Before a finished
-      frame is fed back, we can **re-noise it to a level $\tilde k$** (slightly below 1).
+      frame is fed back, we can **re-noise it to a level $\tilde k$** (slightly above 0).
     - **Full sequence** can't read clean past frames at all: it was only trained with all frames
       at the same level. It generates 8 frames at a time and conditions on the last 8 frames by
       re-noising them to the current level at every denoising step (the "replacement" trick).
@@ -242,7 +242,7 @@ def _(mo):
 
     ### ✏️ Exercise 2
 
-    Implement the re-noising of a generated frame, $\tilde x = \tilde k\, x + (1 - \tilde k)\,\epsilon$,
+    Implement the re-noising of a generated frame, $\tilde x = (1 - \tilde k)\, x + \tilde k\,\epsilon$,
     with fresh noise $\epsilon$ (use `torch.randn(x.shape, generator=g)`).
     """)
     return
@@ -271,7 +271,7 @@ def _(mo):
         mo.callout(mo.vstack([
             mo.md(r"""
             **🤔 Predict first.** All three models feed their own frames back, with clean context
-            ($\tilde k = 1$) where they can. Which of the three training regimes will break first in
+            ($\tilde k = 0$) where they can. Which of the three training regimes will break first in
             a long rollout of 200 frames?
             """),
             mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
@@ -283,12 +283,12 @@ def _(mo):
         ]), kind="info"),
         mo.callout(mo.vstack([
             mo.md(r"""
-            **🤔 Predict first.** Now we re-noise each generated frame to $\tilde k = 0.9$ before the
+            **🤔 Predict first.** Now we re-noise each generated frame to $\tilde k = 0.1$ before the
             teacher-forced model reads it. This model never saw a noisy past frame during training.
-            Will the noise make its rollouts better or worse? And what if you lower $\tilde k$ to 0.5?
+            Will the noise make its rollouts better or worse? And what if you raise $\tilde k$ to 0.5?
             """),
             mo.accordion({"Answer (click after you've guessed)": mo.md(r"""
-            **Better.** With $\tilde k = 0.9$ almost all broken frames disappear. The noise washes out
+            **Better.** With $\tilde k = 0.1$ almost all broken frames disappear. The noise washes out
             the fine details in which generated and real frames differ, so the model's own frames
             look like training inputs again.
 
@@ -305,7 +305,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     length = mo.ui.slider(40, 300, step=20, value=200, label="frames to generate", show_value=True)
-    k_ctx = mo.ui.slider(0.5, 0.99, step=0.01, value=0.9, label="context level k̃ for 're-noised'", show_value=True)
+    k_ctx = mo.ui.slider(0.01, 0.5, step=0.01, value=0.1, label="context level k̃ for 're-noised'", show_value=True)
     mo.hstack([length, k_ctx], justify="start", gap=2)
     return k_ctx, length
 
@@ -332,7 +332,7 @@ def _(V, k_ctx, length, mo, models, ok_renoise, renoise_impl, test_actions, test
                                                      chunk=8),
         }
         for _r in ["teacher forcing", "diffusion forcing"]:
-            for _label, _kk in [("clean", 1.0), (f"re-noised {_k:.2f}", _k)]:
+            for _label, _kk in [("clean", 0.0), (f"re-noised {_k:.2f}", _k)]:
                 rollouts[f"{_r} · {_label}"], _ = V.rollout(models[_r], test_ctx[:, :4], test_actions, _n,
                                                            k_ctx=_kk, renoise=renoise_impl)
     return (rollouts,)

@@ -4,9 +4,9 @@ closed-loop navigation.
 
 The denoiser follows DIAMOND / GameNGen: a 2D U-Net denoises frame t from noise, given the
 previous C frames stacked in its input channels. Every context frame has its own noise level
-(diffusion forcing; level 0 = the frame is missing). Noise levels k as in notebook 3:
-x^k = k x + (1 - k) eps, k = 1 clean. The network predicts the clean frame (x-prediction) and is
-sampled with deterministic Euler steps.
+(diffusion forcing; level 1 = the frame is missing). Noise levels k as in notebook 3:
+x^k = (1 - k) x + k eps, k = 0 clean, k = 1 pure noise. The network predicts the clean frame
+(x-prediction) and is sampled with deterministic Euler steps.
 """
 import base64
 import copy
@@ -162,6 +162,10 @@ class Denoiser(nn.Module):
         B = k.shape[0]
         if offset is None:
             offset = torch.zeros(B, dtype=torch.long, device=k.device)
+        # The shipped checkpoints were trained when this code used the opposite convention
+        # (k = 1 clean, k = 0 pure noise), so the network reads 1 - k. This is the only place
+        # where the convention is converted; everything below sees the old convention.
+        k, k_ctx = 1 - k, 1 - k_ctx
         e = F.silu(self.cond(k, k_ctx, actions, map_in, offset))
         lv = k_ctx[:, :, None, None].expand(-1, -1, *x_noisy.shape[-2:])
         h = self.inp(torch.cat([x_noisy, ctx.flatten(1, 2), lv], 1))
@@ -293,9 +297,9 @@ def map_rgb(m):
 # ------------------------------------------------------------------------------ guided sampling
 
 def renoise(x, k, g=None):
-    """x (B, C, 3, r, r), k (B, C): x^k = k x + (1 - k) eps."""
+    """x (B, C, 3, r, r), k (B, C): x^k = (1 - k) x + k eps."""
     k = k[:, :, None, None, None]
-    return k * x + (1 - k) * torch.randn(x.shape, generator=g, device=x.device)
+    return (1 - k) * x + k * torch.randn(x.shape, generator=g, device=x.device)
 
 
 @torch.no_grad()
@@ -324,35 +328,35 @@ def predict(model, x, k, ctx, k_ctx, acts, map_in, offset, variants=(), guide=No
 
 @torch.no_grad()
 def sample_frame(model, ctx, k_ctx, acts, map_in=None, offset=None, n_steps=10, g=None, variants=(), guide=None):
-    """Euler sampling of one frame from pure noise (k = 0) to clean (k = 1), with x-prediction:
-    the velocity is (x_hat - x) / (1 - k)."""
+    """Euler sampling of one frame from pure noise (k = 1) down to clean (k = 0), with
+    x-prediction: the velocity is dx/dk = (x - x_hat) / k."""
     B, _, ch, H, W = ctx.shape
     dev = ctx.device
     if offset is None:
         offset = torch.zeros(B, dtype=torch.long, device=dev)
     x = torch.randn(B, ch, H, W, generator=g, device=dev)
-    ks = torch.linspace(0, 1, n_steps + 1, device=dev)
-    for j in range(n_steps):
+    ks = torch.linspace(1, 0, n_steps + 1, device=dev)
+    for j in range(n_steps):  # ks[j] > 0 here, only the last step lands on k = 0
         xh = predict(model, x, ks[j].expand(B), ctx, k_ctx, acts, map_in, offset, variants, guide)
-        x = x + (ks[j + 1] - ks[j]) * (xh - x) / (1 - ks[j])
+        x = x + (ks[j + 1] - ks[j]) * (x - xh) / ks[j]
     return x
 
 
 @torch.no_grad()
-def generate(model, ctx, T, k_ctx=None, actions=None, map_in=None, w_map=1.0, w_hist=1.0, hist_k=0.0,
-             n_steps=10, k_gen=0.96, guide=None, seed=0):
+def generate(model, ctx, T, k_ctx=None, actions=None, map_in=None, w_map=1.0, w_hist=1.0, hist_k=1.0,
+             n_steps=10, k_gen=0.04, guide=None, seed=0):
     """Autoregressive generation of T frames after the C context frames ctx (B, C, 3, r, r).
-    k_ctx (B, C): noise levels at which the context is shown (default 1 = clean; 0 = missing).
+    k_ctx (B, C): noise levels at which the context is shown (default 0 = clean; 1 = missing).
     actions (B, C + T - 1) long or None ("no actions"); actions[:, j] leads from frame j to j + 1.
     map_in (B, 4, 17, 17): goal map, taken at the last context frame. Guidance: w_map (the
     unconditional branch has no map), w_hist (the unconditional branch has the history re-noised
-    to level hist_k; 0 = dropped). Generated frames are rounded to 8 bits and fed back at level
+    to level hist_k; 1 = dropped). Generated frames are rounded to 8 bits and fed back at level
     k_gen. Returns (B, T, 3, r, r)."""
     dev = ctx.device
     B = ctx.shape[0]
     g = torch.Generator(device=dev).manual_seed(seed)
     frames = list(ctx.unbind(1))
-    levels = list((torch.ones(B, C, device=dev) if k_ctx is None else k_ctx.to(dev)).unbind(1))
+    levels = list((torch.zeros(B, C, device=dev) if k_ctx is None else k_ctx.to(dev)).unbind(1))
     zero = torch.zeros(B, dtype=torch.long, device=dev)
     for t in range(C, C + T):
         c = torch.stack(frames[-C:], 1)
@@ -360,7 +364,7 @@ def generate(model, ctx, T, k_ctx=None, actions=None, map_in=None, w_map=1.0, w_
         acts = actions[:, t - C:t].long() if actions is not None else torch.full((B, C), NULL_ACT, device=dev)
         variants = []
         if w_hist != 1.0:
-            kh = torch.minimum(kc, torch.full_like(kc, hist_k))
+            kh = torch.maximum(kc, torch.full_like(kc, hist_k))  # at least as noisy as hist_k
             variants.append((w_hist, dict(ctx=renoise(c, kh, g), k_ctx=kh)))
         off = None
         if map_in is not None:
@@ -401,14 +405,15 @@ def video_batch(D, B, drop, g, H=8, p_policy=0.7):
     m = drop(m, torch.tensor(float("nan"), device=dev), torch.where(is_exp, 0.15, 1.0), g)
     has_map = ~torch.isnan(m).flatten(1).any(1)
     o = torch.where(has_map, t - t0, torch.zeros_like(o))
-    # noise levels: the target frame k biased toward noise (logit-normal), the context
-    # mostly almost clean, sometimes anything; single frames and the whole history dropped
-    k = torch.sigmoid(torch.randn(B, generator=g, device=dev) - 0.8)
-    kc = torch.where(r(B, 1) < 0.6, 0.7 + 0.3 * r(B, C), r(B, C))
-    kc = torch.where(r(B, C) < 0.1, torch.zeros_like(kc), kc)
-    kc = drop(kc, torch.tensor(0.0, device=dev), 0.1, g)
+    # noise levels: the target frame k biased toward noise (logit-normal with mean +0.8), the
+    # context mostly almost clean (k < 0.3), sometimes anything; single frames and the whole
+    # history dropped (level 1 = pure noise)
+    k = torch.sigmoid(torch.randn(B, generator=g, device=dev) + 0.8)
+    kc = torch.where(r(B, 1) < 0.6, 0.3 * r(B, C), r(B, C))
+    kc = torch.where(r(B, C) < 0.1, torch.ones_like(kc), kc)
+    kc = drop(kc, torch.tensor(1.0, device=dev), 0.1, g)
     eps = torch.randn(x.shape, generator=g, device=dev)
-    xk = k[:, None, None, None] * x + (1 - k[:, None, None, None]) * eps
+    xk = (1 - k[:, None, None, None]) * x + k[:, None, None, None] * eps
     return x, xk, k, renoise(ctx, kc, g), kc, acts, m, o
 
 
@@ -573,7 +578,7 @@ def navigate(envs, model, idm, read_actions, w=3.0, n_steps=1, H=8, n_exec=4, ma
             f = r["frames"][-C:]
             pad = C - len(f)
             ctx.append(np.concatenate([np.zeros((pad, res, res, 3), np.uint8), np.stack(f)]) if pad else np.stack(f))
-            kc.append([0.0] * pad + [1.0] * len(f))  # missing frames at the start: level 0
+            kc.append([1.0] * pad + [0.0] * len(f))  # missing frames at the start: level 1 (pure noise)
         ctx = to_float(np.stack(ctx)).to(dev)
         kc = torch.tensor(kc, device=dev)
         m = env_map([r["env"] for r in act], [r["pose"] for r in act], dev)

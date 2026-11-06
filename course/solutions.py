@@ -4,8 +4,8 @@ import torch
 # ---------------------------------------------------------------- notebook 1
 
 
-def regression_loss(G, z, x):
-    return ((G(z) - x) ** 2).sum(1).mean()
+def regression_loss(G, eps, x):
+    return ((G(eps) - x) ** 2).sum(1).mean()
 
 
 def nearest_neighbor(y, x):
@@ -28,43 +28,45 @@ def drift_target(y, x, lam, tau):
 # ---------------------------------------------------------------- notebook 2
 
 
-def conditional_path(x1, t, eps):
-    return t * x1 + (1 - t) * eps
+def conditional_path(x, t, eps):
+    return (1 - t) * x + t * eps
 
 
-def conditional_velocity(x, x1, t):
-    return (x1 - x) / (1 - t)
+def conditional_velocity(x_t, x, t):
+    # d/dt x_t = eps - x, with eps = (x_t - (1 - t) x) / t
+    return (x_t - x) / t
 
 
-def posterior_weights(x, t, X1):
-    # p(x1_i | X_t = x) ∝ N(x; t x1_i, (1-t)^2 I): a softmax over the training points
-    sq = torch.cdist(x, t * X1) ** 2
-    return torch.softmax(-sq / (2 * (1 - t) ** 2), dim=1)
+def posterior_weights(x_t, t, X):
+    # p(x_i | x_t) ∝ N(x_t; (1-t) x_i, t^2 I): a softmax over the training points
+    sq = torch.cdist(x_t, (1 - t) * X) ** 2
+    return torch.softmax(-sq / (2 * t ** 2), dim=1)
 
 
-def marginal_velocity(x, t, X1):
-    w = posterior_weights(x, t, X1)
-    x1_hat = w @ X1  # posterior mean E[x1 | X_t = x]
-    return (x1_hat - x) / (1 - t)
+def marginal_velocity(x_t, t, X):
+    w = posterior_weights(x_t, t, X)
+    x_hat = w @ X  # posterior mean E[x | x_t]
+    return (x_t - x_hat) / t
 
 
-def flow_matching_loss(net, x1, t_min=0.0):
-    B = x1.shape[0]
-    t = torch.rand(B, 1) * (1 - t_min) + t_min
-    eps = torch.randn_like(x1)
-    x_t = t * x1 + (1 - t) * eps
+def flow_matching_loss(net, x):
+    B = x.shape[0]
+    t = torch.rand(B, 1)
+    eps = torch.randn_like(x)
+    x_t = (1 - t) * x + t * eps
     v_pred = net.velocity(x_t, t)
-    v_target = x1 - eps
+    v_target = eps - x
     return ((v_pred - v_target) ** 2).mean()
 
 
-def euler_sample(velocity, x0, n_steps):
-    ts = torch.linspace(0, 1, n_steps + 1)
-    xs = [x0]
-    x = x0
+def euler_sample(velocity, eps, n_steps):
+    # backward in time, from noise at t = 1 to data at t = 0
+    ts = torch.linspace(1, 0, n_steps + 1)
+    xs = [eps]
+    x = eps
     for i in range(n_steps):
-        h = ts[i + 1] - ts[i]
-        x = x + h * velocity(x, ts[i].expand(len(x), 1))
+        h = ts[i] - ts[i + 1]
+        x = x - h * velocity(x, ts[i].expand(len(x), 1))
         xs.append(x)
     return torch.stack(xs)
 
@@ -77,7 +79,7 @@ def noise_levels(regime, B, T, g=None):
         k = torch.rand(B, 1, generator=g).expand(B, T)
         return k, k
     if regime == "teacher forcing":
-        return torch.rand(B, T, generator=g), torch.ones(B, T)
+        return torch.rand(B, T, generator=g), torch.zeros(B, T)
     if regime == "diffusion forcing":
         k = torch.rand(B, T, generator=g)
         return k, k
@@ -86,4 +88,4 @@ def noise_levels(regime, B, T, g=None):
 
 def renoise(x, k_ctx, g=None):
     eps = torch.randn(x.shape, generator=g)
-    return k_ctx * x + (1 - k_ctx) * eps
+    return (1 - k_ctx) * x + k_ctx * eps
